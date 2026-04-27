@@ -224,18 +224,38 @@ DROP_TABLES = {
     'bat':          [('feather', 0.25)],
     'spider':       [('silk', 0.60), ('spider_eye', 0.25), ('mushroom', 0.10)],
     'goblin':       [('coin', 0.80), ('coin', 0.50), ('herb', 0.20),
-                     ('gem', 0.08), ('knife', 0.04)],
+                     ('axe', 0.08), ('gem', 0.06), ('knife', 0.04)],
     'skeleton':     [('bone', 0.70), ('bone', 0.40), ('arrow', 0.40),
                      ('coin', 0.30)],
     'ghost':        [('magic_dust', 0.55), ('mana_crys', 0.25),
                      ('blue_flower', 0.15)],
-    'troll':        [('coin', 0.70), ('coin', 0.50), ('big_gem', 0.15),
-                     ('hide', 0.50), ('mushroom', 0.30)],
+    'troll':        [('coin', 0.70), ('coin', 0.50), ('pickaxe', 0.25),
+                     ('big_gem', 0.15), ('hide', 0.50), ('mushroom', 0.30)],
     'wolf':         [('hide', 0.80), ('meat', 0.65), ('feather', 0.10)],
     'giant_spider': [('spider_eye', 1.0), ('silk', 1.0), ('silk', 1.0),
                      ('gem', 0.80), ('big_gem', 0.50), ('lantern', 0.40)],
     'kelpie':       [('gem', 0.50), ('mana_crys', 0.40), ('herb', 0.30),
                      ('big_gem', 0.15)],
+    # New biome enemies
+    'yeti':         [('hide', 0.90), ('meat', 0.80), ('big_gem', 0.10)],
+    'ice_wraith':   [('magic_dust', 0.80), ('mana_crys', 0.60), ('gem', 0.40)],
+    'scorpion':     [('hide', 0.60), ('goo', 0.40), ('gem', 0.10)],
+    'mummy':        [('bone', 0.80), ('coin', 0.60), ('gem', 0.20),
+                     ('big_gem', 0.08)],
+    'swamp_toad':   [('goo', 0.70), ('mushroom', 0.40), ('herb', 0.20)],
+    'will_o':       [('magic_dust', 0.90), ('mana_crys', 0.50), ('gem', 0.25)],
+}
+
+# Boss special loot (guaranteed drops on boss kill)
+BOSS_DROPS = {
+    'giant_spider': [('lantern', 1), ('spell_frost', 1), ('big_gem', 2)],
+    'troll':        [('pickaxe', 1), ('big_gem', 2), ('hide', 3)],
+    'skeleton':     [('sword', 1), ('bone', 5), ('big_gem', 1)],
+    'yeti':         [('axe', 1), ('hide', 3), ('big_gem', 2)],
+    'ice_wraith':   [('spell_frost', 1), ('mana_crys', 3), ('big_gem', 2)],
+    'mummy':        [('bow', 1), ('coin', 10), ('big_gem', 3)],
+    'scorpion':     [('pickaxe', 1), ('gem', 5), ('big_gem', 2)],
+    'ghost':        [('spell_basic', 1), ('magic_dust', 5), ('mana_crys', 2)],
 }
 
 # Chest loot pools by quality tier
@@ -248,13 +268,19 @@ CHEST_LOOT_UNCOMMON = ['sword','axe','pickaxe','bow','spear','lantern',
 CHEST_LOOT_RARE = ['boomerang','sword','bow','spell_bolt','big_gem','lantern']
 
 
-def roll_drops(enemy_type: str, rng: random.Random) -> list:
-    """Return a list of Item instances dropped by an enemy."""
+def roll_drops(enemy_type: str, rng: random.Random,
+               is_boss: bool = False) -> list:
+    """Return a list of Item instances dropped by an enemy."""""
     drops = []
     table = DROP_TABLES.get(enemy_type, [])
     for iid, prob in table:
         if rng.random() < prob:
             drops.append(make_item(iid))
+    # Bosses always drop special guaranteed loot
+    if is_boss and enemy_type in BOSS_DROPS:
+        for iid, count in BOSS_DROPS[enemy_type]:
+            for _ in range(count):
+                drops.append(make_item(iid))
     return drops
 
 

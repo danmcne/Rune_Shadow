@@ -1,4 +1,4 @@
-# Rune & Shadow  v2
+# Rune & Shadow  v3
 
 A top-down roguelike adventure in Python + Pygame.
 
@@ -14,33 +14,76 @@ pip install pygame
 python main.py
 ```
 
+---
+
 ## Controls
 
 | Key / Input | Action |
 |---|---|
 | WASD / Arrow Keys | Move |
-| Mouse position | Aim ranged / magic attacks |
+| Mouse position | Aim ranged/magic attacks |
 | Left Click / SPACE | Attack |
-| E | Interact (dungeon, chest, shrine, pick up item) |
+| E | Interact (gate, dungeon, chest, shrine, pick up item) |
+| TAB | Toggle aim mode (Mouse ↔ Auto) |
 | Q / F / Scroll Wheel | Cycle hotbar |
 | 1–8 | Select hotbar slot |
-| I | Open / close inventory |
+| X | Unequip current hotbar slot |
+| I | Open/close inventory |
 | ESC | Pause menu |
 
 ### Inventory Controls
 
 | Key | Action |
 |---|---|
-| Arrow Keys | Navigate items |
-| Enter or E | **Equip** to hotbar (weapons/tools/magic/light) |
-| Space or Enter | **Use** consumables (potions etc.) |
+| Arrow Keys | Navigate |
+| Enter / E | **Equip** weapon/tool/magic to hotbar |
+| Space / Enter | **Use** consumable (potion etc.) |
+| U | **Unequip** item from hotbar |
 | D | **Drop** one item to the ground |
 | 1–8 | Assign item to hotbar slot |
-| I / ESC | Close inventory |
+| I / ESC | Close |
+
+---
+
+## World Structure
+
+You start in the **Town** — a procedurally generated walled settlement with roads, buildings, a central shrine, and four gates:
+
+| Gate | Leads to | Enemies |
+|---|---|---|
+| North gate | **The Frozen Wastes** (Tundra) | Yeti, Ice Wraith, Skeleton |
+| South gate | **The Sunbaked Reaches** (Desert) | Scorpion, Mummy, Goblin |
+| East gate | **The Verdant Wilds** (Forest) | Wolf, Goblin, Spider, Slime |
+| West gate | **The Murk Hollows** (Swamp) | Swamp Toad, Will-o'-Wisp, Ghost |
+
+Each biome has **2–3 dungeons** with **1–3 levels** each. Deeper dungeon levels are darker, have more enemies, and the boss only appears on the deepest level.
+
+---
+
+## Dungeons
+
+| # | Name | Biome | Levels | Boss |
+|---|---|---|---|---|
+| 0 | The Verdant Labyrinth | East | 1 | Giant Spider |
+| 1 | The Stone Warrens | East | 2 | Stone Troll |
+| 2 | The Haunted Halls | East | 2 | Skeleton Lord |
+| 3 | The Frozen Vaults | North | 2 | Elder Yeti |
+| 4 | The Ice Queen's Lair | North | 3 | Ice Wraith |
+| 5 | The Sunken Tombs | South | 2 | Mummy Lord |
+| 6 | The Scorched Crypts | South | 3 | Giant Scorpion |
+| 7 | The Murk Warrens | West | 2 | Stone Troll |
+| 8 | The Bog of Shadows | West | 3 | Ghost |
+
+- **[E] near dungeon entrance** to enter
+- **[E] on stairs up** to ascend / exit
+- **[E] on stairs down** to descend to next level
+- **[E] on shrine** to heal fully and save
+
+---
 
 ## Cheat Codes
 
-Type these letter codes at any time during play (no UI, just type):
+Type these at any time during play (no UI prompt needed — just type):
 
 | Code | Effect |
 |---|---|
@@ -51,55 +94,44 @@ Type these letter codes at any time during play (no UI, just type):
 | `NOCLIP` | Toggle ghost mode (walk through walls) |
 | `RESPAWN` | Respawn all enemies on current map |
 | `LEVELUP` | +20 max HP and mana |
-| `FULLCLEAR` | Instantly kill all enemies on current map |
+| `FULLCLEAR` | Kill all enemies on current map |
 
-## What's New in v2
+---
 
-### Gameplay
-1. **Pause menu** — Resume / New Game / Save & Quit / Quit (no save)
-2. **Save & Load** — JSON save file; autosaved at shrines
-3. **Difficulty levels** — Easy (50% damage taken), Normal, Hard (150%)
-4. **Drop items** — Press D in inventory to drop items to the ground
-5. **Equip vs Use** — Enter/E equips weapons; Space uses consumables
-6. **Cheat codes** — Full cheat suite for testing
+## What's New in v3
 
-### World Generation
-7. **Safe player start** — Player spawns on a real grass tile with open neighbours (never surrounded by water)
-8. **Forest infill** — Trees use 40% random infill instead of solid walls; forests are now passable
-9. **Connected dungeons** — All dungeon generators guarantee full connectivity from entrance; unreachable areas are carved open or walled off; enemy spawns are validated to reachable tiles only
-10. **Chest loot** — Chests now drop tiered loot (common + uncommon + rare chance) with items scattered around the chest
+### Bug Fixes
+1. **Drop no longer duplicates** — item is removed from inventory *before* the GroundItem is created
+2. **Chest loot on walkable tiles** — drops scatter to nearest walkable tile; fallback goes directly to inventory
+3. **Boss never respawns after load** — `boss_killed[(dun_id, level)]` is persisted in the save file
+4. **Unequip** — press **U** in inventory or **X** in play to clear a hotbar slot
+5. **Cave dungeons always connected** — generator now finds the *largest* component (not centre-adjacent), retries up to 3x for adequate size
 
-### Combat & Enemies
-11. **Swimming** — Player can enter T_WATER tiles at half speed; shown with blue tint
-12. **Kelpie** — New water monster that lives in rivers and lakes; fires water bolts
-13. **Variable mob speed** — Wolves (3.2) are faster than player (3.0); trolls (1.0) are slower
-14. **Aggro types** — Sight aggro (wolf, goblin…), Attack aggro (slime, spider…), passive planned
-15. **Flee behaviour** — Slimes flee at 20% HP; bats flee at 15%; trolls barely flee
-16. **De-aggro** — Goblins and wolves give up the chase if you outrun them
-17. **Fight to death** — Spiders, skeletons, ghosts, kelpies never stop
-18. **Ghosts** — Pass through walls; always partially visible in darkness; glow faintly
-19. **Dark dungeons** — Most enemies invisible below brightness threshold; luminous enemies (slime, ghost) always visible
-20. **Mouse aim** — Ranged and magic attacks fire toward mouse cursor; autoaim snaps to nearest enemy within 150px
-21. **Mob names** — All enemies display their name above their sprite
+### New Features
+6. **Town start** — player begins in a procedural walled town with roads, buildings, and a central shrine
+7. **Four biomes** — Forest (East), Tundra (North), Desert (South), Swamp (West); each with unique tiles, enemies, and dungeons
+8. **Multi-level dungeons** — 9 dungeons total with 1–3 levels; stairs up/down; boss only on deepest level; ambient darkness increases per level
+9. **Aim mode toggle** — TAB switches between Mouse aim and Auto-aim; indicator dot changes colour (yellow = mouse, cyan = auto)
+10. **Swamp slow tiles** — T_SWAMP reduces player speed to 60%; shown with green tint
+11. **6 new enemies** — Yeti, Ice Wraith, Scorpion, Mummy, Swamp Toad, Will-o'-Wisp
+12. **Goblin drops axe** (8% chance); **Troll drops pickaxe** (25% chance)
+13. **Boss guaranteed drops** — each boss type has a fixed loot table (e.g. Troll → pickaxe + gems; Giant Spider → lantern + frost spell)
 
-### Items & Respawn
-22. **Mob respawn** — Overworld enemies respawn after ~5 minutes
-23. **Item respawn** — Dropped/consumed overworld items respawn after ~2.5 min
-24. **Item decay** — Dropped items (from kills, chests) disappear after ~2 minutes (flicker warning)
+---
 
 ## File Structure
 
 ```
-main.py                  — Entry point
-game.py                  — Main loop, camera, save/load, cheats
-entities.py              — Player, Enemy subclasses, Projectile
-generation.py            — Overworld (Perlin) + 3 dungeon generators
-game_map.py              — Tile grid, GroundItem, respawn queues
-items.py                 — Item definitions, Inventory, drop tables
-ui.py                    — HUD, menus, inventory screen
-constants.py             — All constants, tile types, colors
-asset_manager.py         — Sprite / placeholder art loading
-animation.py             — Animator state machine
-noise_gen.py             — Perlin noise for world gen
-create_placeholder_assets.py  — Generates placeholder sprites if no assets folder
+main.py                   Entry point
+game.py                   Main loop, multi-map world, save/load, cheats
+entities.py               Player, 16 enemy types, Projectile
+generation.py             TownGenerator, 4 BiomeGenerators, 3 DungeonGenerators
+game_map.py               GameMap, GroundItem (lifetime + respawn)
+items.py                  Item definitions, Inventory, drop/boss tables
+ui.py                     HUD, Inventory screen, all menus
+constants.py              Tiles, colours, biomes, dungeon registry
+asset_manager.py          Sprite/placeholder art loading
+animation.py              Animator state machine
+noise_gen.py              Perlin noise for world generation
+create_placeholder_assets.py  Generates placeholder art if /assets missing
 ```
