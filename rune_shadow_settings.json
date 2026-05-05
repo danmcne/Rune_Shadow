@@ -1,0 +1,50 @@
+{
+  "num_players": 1,
+  "difficulty": 0,
+  "keybindings": [
+    {
+      "up": 119,
+      "down": 115,
+      "left": 97,
+      "right": 100,
+      "attack": 32,
+      "interact": 101,
+      "inventory": 113,
+      "aim_toggle": 9,
+      "unequip": 120,
+      "hotbar_prev": 96,
+      "hotbar_next": 102,
+      "hotbar_1": 49,
+      "hotbar_2": 50,
+      "hotbar_3": 51,
+      "hotbar_4": 52,
+      "hotbar_5": 53,
+      "hotbar_6": 54,
+      "hotbar_7": 55,
+      "hotbar_8": 56,
+      "pause": 27
+    },
+    {
+      "up": 105,
+      "down": 107,
+      "left": 106,
+      "right": 108,
+      "attack": 109,
+      "interact": 117,
+      "inventory": 111,
+      "aim_toggle": null,
+      "unequip": 59,
+      "hotbar_prev": null,
+      "hotbar_next": null,
+      "hotbar_1": 54,
+      "hotbar_2": 55,
+      "hotbar_3": 56,
+      "hotbar_4": 57,
+      "hotbar_5": 48,
+      "hotbar_6": null,
+      "hotbar_7": null,
+      "hotbar_8": null,
+      "pause": null
+    }
+  ]
+}

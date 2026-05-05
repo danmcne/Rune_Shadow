@@ -19,6 +19,8 @@ def main():
 
     pygame.init()
     pygame.font.init()
+    import sound_engine
+    sound_engine.init()   # init mixer before display so pre_init takes effect
 
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
     pygame.display.set_caption(TITLE)

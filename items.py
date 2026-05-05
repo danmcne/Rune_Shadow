@@ -210,8 +210,10 @@ BIG_GEM = _reg(_currency('big_gem',"Large Gem",  (255,100,200), 30))
 # Misc
 ROPE       = _reg(Item('rope',  "Rope",        IT_TOOL,  BROWN, value=8,
                         description="Can be used to cross gaps or bind things."))
-BOOMERANG  = _reg(_weapon('boomerang',"Boomerang",10,200,35,(200,160,80),25,
-                           desc="Flies out and returns. Hits twice!"))
+BOOMERANG  = _reg(_ranged('boomerang', "Boomerang", 18, None, 6,
+                           (220, 170, 60), 80, (200, 160, 80), 35,
+                           desc="Flies out, hits once, returns. Can't re-throw until it comes back."))
+ITEMS['boomerang'].spell = 'boomerang'   # triggers returning-projectile logic
 SHIELD     = _reg(Item('shield',"Shield",       IT_ARMOR, GRAY, value=30,
                         description="Reduces incoming damage by 5."))
 _s = ITEMS['shield']; _s.defense = 5
@@ -354,3 +356,91 @@ class Inventory:
             return False
         self.gold -= amount
         return True
+
+# ════════════════════════════════════════════════════════════════════════════════
+#  v5 ADDITIONS – Rare / Castle items, Dragon drops
+# ════════════════════════════════════════════════════════════════════════════════
+
+# ── Armour helper ─────────────────────────────────────────────────────────────
+def _armor(iid, name, defense, speed_bonus, color, value=40, desc=""):
+    it = Item(iid, name, IT_ARMOR, color, value=value, description=desc)
+    it.defense      = defense
+    it.speed_bonus  = speed_bonus   # added to player.speed when equipped (hotbar)
+    return it
+
+# ── Make speed_bonus a default attribute on Item ─────────────────────────────
+_orig_init = Item.__init__
+def _patched_init(self, *a, **kw):
+    _orig_init(self, *a, **kw)
+    if not hasattr(self, 'speed_bonus'):
+        self.speed_bonus = 0.0
+Item.__init__ = _patched_init
+
+# ── Register rare items ───────────────────────────────────────────────────────
+
+# Weapons
+DRAGON_BLADE = _reg(_weapon('dragon_blade', "Dragon Blade",  45, 56, 18,
+                             (255, 60, 20), 250,
+                             desc="Forged from a dragon scale. Burns enemies."))
+SHADOW_STAFF = _reg(_weapon('shadow_staff', "Shadow Staff",  22, 32, 20,
+                             (120, 30, 200), 180,
+                             desc="A staff carved from void-wood. Deals dark damage."))
+
+# Area-blast spell – fires a slow explosive orb; game.py handles the AoE on impact
+AREA_BLAST   = _reg(_magic('area_blast', "Thunder Orb",  35, 40,
+                            'area_blast', 3, (180, 80, 255), 45,
+                            (160, 60, 230), 100,
+                            desc="Explodes on impact, damaging all nearby enemies."))
+
+# Single-target super-power spell
+VOID_BOLT    = _reg(_magic('void_bolt',  "Void Bolt",    50, 35,
+                            'void_bolt',  10, (80, 0, 180), 38,
+                            (60, 0, 140), 120,
+                            desc="A devastating bolt of void energy."))
+
+# Speed boots – when in hotbar, grant a speed bonus
+SWIFTBOOTS   = _reg(_armor('swiftboots', "Swift Boots",  0, 1.2,
+                            (80, 200, 120), 120,
+                            desc="Enchanted boots. +1.2 move speed when equipped."))
+IRONARMOR    = _reg(_armor('iron_armor', "Iron Armour",  8, 0.0,
+                            GRAY, 100,
+                            desc="Heavy iron armour. Reduces damage taken."))
+
+# Consumables
+ELIXIR        = _reg(_consumable('elixir',    "Elixir of Life",  80, 50,
+                                  (220, 120, 255), 60, True,
+                                  desc="Restores both HP and mana greatly."))
+BERSERKER_DRAUGHT = _reg(_consumable('berserk_draught', "Berserker Draught",
+                                      0, 0, (220, 50, 20), 40, True,
+                                      desc="Temporarily doubles your attack damage. 10 s."))
+# (berserk effect handled in game.py via a timed buff flag on the player)
+
+DRAGON_SCALE  = _reg(_ingredient('dragon_scale', "Dragon Scale",
+                                   COL_DRAGON, 50,
+                                   desc="A glittering dragon scale. Rare crafting component."))
+
+# ── Extend drop / boss tables ─────────────────────────────────────────────────
+DROP_TABLES['mimic']  = [('coin', 1.0), ('coin', 1.0), ('gem', 0.60),
+                          ('big_gem', 0.30), ('potion', 0.80)]
+DROP_TABLES['dragon']       = [('dragon_scale', 0.90), ('big_gem', 1.0),
+                                ('big_gem', 1.0), ('coin', 1.0)]
+DROP_TABLES['frost_dragon'] = [('dragon_scale', 0.90), ('mana_crys', 1.0),
+                                ('spell_frost', 0.80), ('big_gem', 1.0)]
+DROP_TABLES['sand_dragon']  = [('dragon_scale', 0.90), ('big_gem', 1.0),
+                                ('gem', 1.0), ('coin', 1.0)]
+DROP_TABLES['swamp_dragon'] = [('dragon_scale', 0.90), ('magic_dust', 1.0),
+                                ('goo', 1.0), ('big_gem', 1.0)]
+
+BOSS_DROPS['dragon']        = [('dragon_blade', 1), ('dragon_scale', 3),
+                                ('big_gem', 5), ('area_blast', 1)]
+BOSS_DROPS['frost_dragon']  = [('void_bolt', 1), ('dragon_scale', 3),
+                                ('mana_crys', 5), ('swiftboots', 1)]
+BOSS_DROPS['sand_dragon']   = [('dragon_blade', 1), ('dragon_scale', 3),
+                                ('iron_armor', 1), ('big_gem', 5)]
+BOSS_DROPS['swamp_dragon']  = [('shadow_staff', 1), ('dragon_scale', 3),
+                                ('area_blast', 1), ('elixir', 3)]
+
+# Expand chest loot pools to include rare items
+CHEST_LOOT_RARE.extend(['dragon_blade', 'swiftboots', 'iron_armor',
+                         'area_blast', 'void_bolt', 'elixir', 'shadow_staff'])
+

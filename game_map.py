@@ -66,6 +66,7 @@ class GameMap:
         self.exit_tile        = (0, 0)
         self.stairs_down_tile = None
         self.chest_opened: set = set()
+        self.mimics_revealed: set = set()    # (tx,ty) of mimics already spawned
         self.boss_killed: bool  = False   # tracks if boss was killed this run
         self.ow_entrance      = (0, 0)    # where on the overworld we came from
 
