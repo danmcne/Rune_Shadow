@@ -48,6 +48,19 @@ ENTITY_TYPES = {
     'troll':        COL_TROLL,
     'wolf':         COL_WOLF,
     'giant_spider': COL_BIG_SPIDER,
+    # Biome-specific enemies
+    'yeti':         (200, 230, 255),
+    'ice_wraith':   (160, 200, 255),
+    'scorpion':     (200, 160, 60),
+    'mummy':        (200, 190, 150),
+    'swamp_toad':   (80, 160, 60),
+    'will_o':       (140, 220, 255),
+    'mimic':        (160, 110, 50),
+    # Dragon bosses — larger sprites (still same size placeholder)
+    'dragon':       (180, 40, 20),
+    'frost_dragon': (100, 180, 255),
+    'sand_dragon':  (220, 180, 60),
+    'swamp_dragon': (60, 150, 60),
 }
 
 PROJECTILE_TYPES = {
@@ -59,6 +72,9 @@ PROJECTILE_TYPES = {
     'arcane':    COL_MAGIC,
     'bone':      COL_BONE,
     'web':       (230, 230, 200),
+    'boomerang': (200, 160, 80),
+    'void_bolt': (80, 0, 180),
+    'area_blast':(180, 80, 255),
 }
 
 FX_TYPES = {
@@ -261,79 +277,219 @@ def make_entity_sprites(quiet: bool):
 
 def _make_icon(col, sz=ICON_SZ, shape='square') -> pygame.Surface:
     s = pygame.Surface((sz, sz), pygame.SRCALPHA)
-    lighter = tuple(min(255, c+60) for c in col)
-    darker  = tuple(max(0,   c-40) for c in col)
+    lighter = tuple(min(255, c + 60) for c in col)
+    darker  = tuple(max(0,   c - 40) for c in col)
+    mid     = sz // 2
+
     if shape == 'diamond':
-        pts = [(sz//2, 3), (sz-3, sz//2), (sz//2, sz-3), (3, sz//2)]
+        pts = [(mid, 3), (sz-3, mid), (mid, sz-3), (3, mid)]
         pygame.draw.polygon(s, col, pts)
         pygame.draw.polygon(s, darker, pts, 2)
+        pygame.draw.line(s, lighter, (mid, 6), (mid, sz-6), 1)
+
     elif shape == 'circle':
-        pygame.draw.circle(s, col,     (sz//2, sz//2), sz//2-2)
-        pygame.draw.circle(s, darker,  (sz//2, sz//2), sz//2-2, 2)
-        pygame.draw.circle(s, lighter, (sz//2-3, sz//2-3), sz//6)
+        pygame.draw.circle(s, col,     (mid, mid), mid - 3)
+        pygame.draw.circle(s, darker,  (mid, mid), mid - 3, 2)
+        pygame.draw.circle(s, lighter, (mid - 4, mid - 4), mid // 4)
+
     elif shape == 'blade':
-        pygame.draw.polygon(s, col, [(sz//2,3),(sz-4,sz-4),(sz//2,sz-8),(4,sz-4)])
-        pygame.draw.polygon(s, darker, [(sz//2,3),(sz-4,sz-4),(sz//2,sz-8),(4,sz-4)], 2)
-        pygame.draw.line(s, lighter, (sz//2, 6), (sz//2, sz-6), 2)
+        # Straight narrow blade pointing up-right
+        pts = [(mid, 3), (sz-5, sz-5), (mid, sz-8), (5, sz-5)]
+        pygame.draw.polygon(s, col, pts)
+        pygame.draw.polygon(s, darker, pts, 2)
+        pygame.draw.line(s, lighter, (mid, 5), (mid, sz-7), 2)
+
+    elif shape == 'axe':
+        # Axe head + handle
+        pygame.draw.line(s, darker, (mid, sz-3), (mid+4, 5), 4)   # handle
+        pygame.draw.line(s, lighter, (mid-1, sz-3), (mid+3, 5), 2)
+        head = [(mid+4, 4), (sz-3, 8), (sz-4, mid), (mid+2, mid+2)]
+        pygame.draw.polygon(s, col, head)
+        pygame.draw.polygon(s, darker, head, 2)
+
+    elif shape == 'arrow':
+        # Arrow pointing up-right
+        pygame.draw.line(s, col, (5, sz-5), (sz-5, 5), 3)
+        tip = [(sz-5, 5), (sz-5, mid-2), (mid+2, 5)]
+        pygame.draw.polygon(s, col, tip)
+        pygame.draw.line(s, darker, (7, sz-5), (sz-7, 7), 1)
+
     elif shape == 'staff':
-        pygame.draw.line(s, col, (sz//4, sz-4), (3*sz//4, 4), 4)
-        pygame.draw.circle(s, lighter, (3*sz//4, 4), 5)
+        pygame.draw.line(s, col, (sz//4+1, sz-4), (3*sz//4, 4), 4)
+        pygame.draw.line(s, lighter, (sz//4, sz-4), (3*sz//4-1, 5), 2)
+        pygame.draw.circle(s, lighter, (3*sz//4, 5), 6)
+        pygame.draw.circle(s, col,     (3*sz//4, 5), 4)
+
+    elif shape == 'bow':
+        # Curved bow shape
+        pygame.draw.arc(s, col, (3, 3, mid, sz-6), -0.5, 3.6, 4)
+        pygame.draw.line(s, lighter, (3 + mid//2, 4), (3 + mid//2, sz-4), 1)  # string
+
+    elif shape == 'sling':
+        pygame.draw.arc(s, col, (4, 4, sz-8, sz-8), 0.3, 3.0, 3)
+        pygame.draw.circle(s, col, (mid, sz-5), 4)
+        pygame.draw.circle(s, lighter, (mid, sz-5), 2)
+
+    elif shape == 'boomerang':
+        # Curved wing shape
+        pygame.draw.arc(s, col, (2, 2, sz-4, sz-4), 0.2, 2.0, 6)
+        pygame.draw.arc(s, col, (6, 6, sz-12, sz-12), 0.5, 2.3, 3)
+        pygame.draw.circle(s, lighter, (mid, mid), 3)
+
     elif shape == 'scroll':
-        pygame.draw.rect(s, col, (5, 4, sz-10, sz-8), border_radius=3)
-        pygame.draw.rect(s, darker, (5,4,sz-10,sz-8), 1, border_radius=3)
+        pygame.draw.rect(s, col, (6, 4, sz-12, sz-8), border_radius=4)
+        pygame.draw.rect(s, darker, (6, 4, sz-12, sz-8), 2, border_radius=4)
         for y in range(10, sz-8, 5):
-            pygame.draw.line(s, darker, (8, y), (sz-8, y), 1)
+            pygame.draw.line(s, darker, (9, y), (sz-9, y), 1)
+        pygame.draw.rect(s, lighter, (6, 4, sz-12, 5), border_radius=2)
+
+    elif shape == 'orb':
+        pygame.draw.circle(s, col,     (mid, mid), mid - 2)
+        pygame.draw.circle(s, darker,  (mid, mid), mid - 2, 2)
+        pygame.draw.circle(s, lighter, (mid - 5, mid - 5), mid // 4)
+        # Energy crackle
+        import random; rng = random.Random(hash(col))
+        for _ in range(5):
+            x1 = rng.randint(4, sz-4); y1 = rng.randint(4, sz-4)
+            x2 = rng.randint(4, sz-4); y2 = rng.randint(4, sz-4)
+            pygame.draw.line(s, lighter, (x1,y1), (x2,y2), 1)
+
+    elif shape == 'shield':
+        pts = [(mid, 3), (sz-4, 8), (sz-4, sz*2//3), (mid, sz-3), (4, sz*2//3), (4, 8)]
+        pygame.draw.polygon(s, col, pts)
+        pygame.draw.polygon(s, darker, pts, 2)
+        pygame.draw.line(s, lighter, (mid, 6), (mid, sz-8), 2)
+        pygame.draw.line(s, lighter, (8, sz//3), (sz-8, sz//3), 1)
+
+    elif shape == 'boots':
+        # Simple boot silhouette
+        pygame.draw.rect(s, col, (6, 4, sz//2, sz-10), border_radius=3)   # leg
+        pygame.draw.rect(s, col, (4, sz-14, sz-6, 10), border_radius=4)   # sole
+        pygame.draw.rect(s, darker, (6, 4, sz//2, sz-10), 1, border_radius=3)
+        pygame.draw.rect(s, darker, (4, sz-14, sz-6, 10), 1, border_radius=4)
+        pygame.draw.line(s, lighter, (7, 6), (7+sz//2-4, 6), 1)
+
+    elif shape == 'armor':
+        # Breastplate / cuirass shape
+        pts = [(mid, 4), (sz-5, 10), (sz-4, sz-8), (mid, sz-4), (4, sz-8), (5, 10)]
+        pygame.draw.polygon(s, col, pts)
+        pygame.draw.polygon(s, darker, pts, 2)
+        # Neck guard
+        pygame.draw.rect(s, lighter, (mid-5, 4, 10, 6))
+        # Vertical line detail
+        pygame.draw.line(s, darker, (mid, 10), (mid, sz-8), 1)
+
     elif shape == 'potion':
-        pygame.draw.rect(s, col, (sz//2-3, 4, 6, 6))
-        pygame.draw.ellipse(s, col, (4, 10, sz-8, sz-14))
-        pygame.draw.ellipse(s, darker, (4,10,sz-8,sz-14), 2)
-        pygame.draw.circle(s, lighter, (sz//3, sz//2+2), 4)
-    else:
-        pygame.draw.rect(s, col, (4,4,sz-8,sz-8), border_radius=3)
-        pygame.draw.rect(s, darker, (4,4,sz-8,sz-8), 1, border_radius=3)
-        pygame.draw.rect(s, lighter, (6,6,sz//3,sz//3))
+        # Flask with cork
+        pygame.draw.rect(s, col,     (mid-3, 3, 6, 7))    # neck
+        pygame.draw.ellipse(s, col,  (4, 10, sz-8, sz-14))  # body
+        pygame.draw.ellipse(s, darker,(4,10, sz-8, sz-14), 2)
+        pygame.draw.circle(s, lighter,(mid-3, mid+2), 4)
+        pygame.draw.rect(s, darker,  (mid-4, 2, 8, 4))    # cork
+
+    elif shape == 'torch':
+        pygame.draw.line(s, BROWN,   (mid, sz-4), (mid, sz//3), 4)
+        pygame.draw.ellipse(s, ORANGE, (mid-5, 4, 10, 12))
+        pygame.draw.ellipse(s, YELLOW, (mid-3, 5, 6,  8))
+
+    elif shape == 'candle':
+        pygame.draw.rect(s, col, (mid-4, mid, 8, sz//2-2))   # body
+        pygame.draw.ellipse(s, YELLOW, (mid-2, mid-6, 4, 8)) # flame
+        pygame.draw.rect(s, lighter, (mid-3, mid, 6, 3))
+
+    elif shape == 'lantern':
+        pygame.draw.rect(s, col,    (6, 10, sz-12, sz-16), border_radius=3)
+        pygame.draw.rect(s, darker, (6, 10, sz-12, sz-16), 2, border_radius=3)
+        pygame.draw.line(s, darker, (mid, 4), (mid, 10), 2)   # handle
+        pygame.draw.ellipse(s, YELLOW, (mid-4, mid-2, 8, 10)) # glow
+        # Grill lines
+        for y in range(13, sz-8, 5):
+            pygame.draw.line(s, darker, (8, y), (sz-8, y), 1)
+
+    elif shape == 'feather':
+        # Quill shape
+        pygame.draw.line(s, col, (5, sz-5), (sz-5, 5), 2)    # spine
+        for i in range(4):
+            t = (i+1) / 5
+            bx = int(5 + (sz-10)*t); by = int(sz-5 - (sz-10)*t)
+            pygame.draw.line(s, lighter, (bx, by), (bx-5, by-3), 1)
+            pygame.draw.line(s, col,    (bx, by), (bx+3, by+5), 1)
+
+    elif shape == 'rope':
+        # Coiled rope
+        for i in range(3):
+            r = mid - 3 - i*3
+            if r > 2:
+                pygame.draw.circle(s, col, (mid, mid), r, 2)
+        pygame.draw.line(s, col, (mid, 4), (mid+6, 2), 2)
+        pygame.draw.line(s, col, (mid, sz-4), (mid-6, sz-2), 2)
+
+    else:  # square fallback
+        pygame.draw.rect(s, col, (4, 4, sz-8, sz-8), border_radius=3)
+        pygame.draw.rect(s, darker, (4, 4, sz-8, sz-8), 1, border_radius=3)
+        pygame.draw.rect(s, lighter, (6, 6, sz//3, sz//3))
+
     return s
 
 
 _ICON_SHAPES = {
-    'knife':      (LIGHT_GRAY,  'blade'),
-    'staff':      ((120,80,200),'staff'),
-    'axe':        (BROWN,       'blade'),
-    'pickaxe':    (GRAY,        'blade'),
-    'sword':      (LIGHT_GRAY,  'blade'),
-    'spear':      ((200,200,180),'blade'),
-    'sling':      (BROWN,       'square'),
-    'bow':        (BROWN,       'staff'),
-    'spell_fire': (ORANGE,      'scroll'),
-    'spell_frost':((140,200,255),'scroll'),
-    'spell_bolt': (YELLOW,      'scroll'),
-    'spell_basic':(CYAN,        'scroll'),
-    'stone':      (COL_STONE,   'circle'),
-    'arrow':      (COL_ARROW,   'blade'),
-    'mushroom':   (RED,         'circle'),
-    'blue_flower':((100,130,255),'circle'),
-    'bread':      ((220,200,150),'square'),
-    'herb':       (GREEN,       'circle'),
-    'potion':     (RED,         'potion'),
-    'mana_pot':   (BLUE,        'potion'),
-    'meat':       ((220,100,80),'square'),
-    'goo':        (COL_SLIME,   'circle'),
-    'silk':       (WHITE,       'square'),
-    'spider_eye': (RED,         'circle'),
-    'bone':       (COL_SKELETON,'blade'),
-    'feather':    (WHITE,       'blade'),
-    'magic_dust': (CYAN,        'diamond'),
-    'hide':       (BROWN,       'square'),
-    'mana_crys':  (BLUE,        'diamond'),
-    'candle':     (YELLOW,      'potion'),
-    'lantern':    (ORANGE,      'potion'),
-    'torch':      (ORANGE,      'staff'),
-    'coin':       (GOLD,        'circle'),
-    'gem':        (CYAN,        'diamond'),
-    'big_gem':    ((255,100,200),'diamond'),
-    'rope':       (BROWN,       'square'),
-    'boomerang':  ((200,160,80),'blade'),
-    'shield':     (GRAY,        'square'),
+    # ── Weapons ───────────────────────────────────────────────────────────────
+    'knife':           (LIGHT_GRAY,       'blade'),
+    'staff':           ((120, 80, 200),   'staff'),
+    'axe':             (BROWN,            'axe'),
+    'pickaxe':         (GRAY,             'axe'),
+    'sword':           (LIGHT_GRAY,       'blade'),
+    'spear':           ((200, 200, 180),  'blade'),
+    'boomerang':       ((200, 160, 80),   'boomerang'),
+    'dragon_blade':    ((255, 80, 30),    'blade'),
+    'shadow_staff':    ((60, 0, 120),     'staff'),
+    # ── Ranged ────────────────────────────────────────────────────────────────
+    'sling':           (BROWN,            'sling'),
+    'bow':             (BROWN,            'bow'),
+    # ── Ammo ──────────────────────────────────────────────────────────────────
+    'stone':           (COL_STONE,        'circle'),
+    'arrow':           (COL_ARROW,        'arrow'),
+    # ── Magic scrolls ─────────────────────────────────────────────────────────
+    'spell_fire':      (ORANGE,           'scroll'),
+    'spell_frost':     ((140, 200, 255),  'scroll'),
+    'spell_bolt':      (YELLOW,           'scroll'),
+    'spell_basic':     (CYAN,             'scroll'),
+    'area_blast':      ((180, 80, 255),   'orb'),
+    'void_bolt':       ((80, 0, 180),     'orb'),
+    # ── Armour ────────────────────────────────────────────────────────────────
+    'shield':          (GRAY,             'shield'),
+    'swiftboots':      ((80, 200, 255),   'boots'),
+    'iron_armor':      (GRAY,             'armor'),
+    # ── Consumables ───────────────────────────────────────────────────────────
+    'mushroom':        (RED,              'circle'),
+    'blue_flower':     ((100, 130, 255),  'circle'),
+    'bread':           ((220, 200, 150),  'square'),
+    'herb':            (GREEN,            'circle'),
+    'potion':          (RED,              'potion'),
+    'mana_pot':        (BLUE,             'potion'),
+    'meat':            ((220, 100, 80),   'square'),
+    'elixir':          ((255, 215, 100),  'potion'),
+    'berserk_draught': ((200, 40, 40),    'potion'),
+    # ── Ingredients / crafting ────────────────────────────────────────────────
+    'goo':             (COL_SLIME,        'circle'),
+    'silk':            (WHITE,            'square'),
+    'spider_eye':      (RED,              'circle'),
+    'bone':            (COL_SKELETON,     'blade'),
+    'feather':         (WHITE,            'feather'),
+    'magic_dust':      (CYAN,             'diamond'),
+    'hide':            (BROWN,            'square'),
+    'mana_crys':       (BLUE,             'diamond'),
+    'dragon_scale':    ((200, 60, 20),    'diamond'),
+    # ── Light sources ─────────────────────────────────────────────────────────
+    'candle':          (YELLOW,           'candle'),
+    'lantern':         (ORANGE,           'lantern'),
+    'torch':           (ORANGE,           'torch'),
+    # ── Currency ──────────────────────────────────────────────────────────────
+    'coin':            (GOLD,             'circle'),
+    'gem':             (CYAN,             'diamond'),
+    'big_gem':         ((255, 100, 200),  'diamond'),
+    # ── Tools ─────────────────────────────────────────────────────────────────
+    'rope':            (BROWN,            'rope'),
 }
 
 

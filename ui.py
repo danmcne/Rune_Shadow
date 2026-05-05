@@ -60,7 +60,7 @@ class HUD:
             draw_text(s, "[TAB]", status_x, 20, 10, GRAY)
             self._draw_hotbar(s, players[0],
                               SCREEN_WIDTH//2 - (eff_slots*(self.SLOT_SIZE+self.SLOT_PAD))//2,
-                              50, label="P1", slots=eff_slots)
+                              50, label="P1", slots=eff_slots, asset_mgr=asset_mgr)
         else:
             # P1 left, P2 right
             self._draw_player_bars(s, players[0], 4, 4, 140, label=PLAYER_NAMES[0])
@@ -69,11 +69,11 @@ class HUD:
             # P1 hotbar (5 slots, keys 1-5)
             self._draw_hotbar(s, players[0],
                               SCREEN_WIDTH//5 - (eff_slots*(self.SLOT_SIZE+self.SLOT_PAD))//2,
-                              70, label="P1", slots=eff_slots)
+                              70, label="P1", slots=eff_slots, asset_mgr=asset_mgr)
             # P2 hotbar (5 slots, keys 6-0)
             self._draw_hotbar(s, players[1],
                               4*SCREEN_WIDTH//5 - (eff_slots*(self.SLOT_SIZE+self.SLOT_PAD))//2,
-                              70, label="P2", slots=eff_slots)
+                              70, label="P2", slots=eff_slots, asset_mgr=asset_mgr)
 
         diff_col = [GREEN, WHITE, RED][difficulty]
         draw_text(s, DIFFICULTY_LABELS[difficulty], SCREEN_WIDTH//2 - 24, 4, 11, diff_col)
@@ -106,7 +106,7 @@ class HUD:
                  BLUE, label=f"MP {player.mana}/{player.max_mana}")
         draw_text(s, f"G:{player.inventory.gold}", x, y+32, 11, GOLD, False)
 
-    def _draw_hotbar(self, s, player, hb_x, hb_y, label="", slots=None):
+    def _draw_hotbar(self, s, player, hb_x, hb_y, label="", slots=None, asset_mgr=None):
         if slots is None:
             slots = HOTBAR_SLOTS
         if label:
@@ -121,7 +121,12 @@ class HUD:
             pygame.draw.rect(s, YELLOW if sel else (60, 60, 80), (sx, hb_y, sz, sz), 2)
             if iid and iid in ITEMS:
                 it = ITEMS[iid]; isz = sz - 10
-                pygame.draw.rect(s, it.color, (sx+5, hb_y+5, isz, isz))
+                spr = asset_mgr.get_item_icon(iid) if asset_mgr else None
+                if spr:
+                    scaled = pygame.transform.scale(spr, (isz, isz))
+                    s.blit(scaled, (sx + 5, hb_y + 5))
+                else:
+                    pygame.draw.rect(s, it.color, (sx+5, hb_y+5, isz, isz))
                 cnt = player.inventory.count(iid)
                 if it.stackable and cnt > 0:
                     draw_text(s, str(cnt), sx+sz-14, hb_y+sz-14, 10, WHITE, False)
@@ -254,7 +259,12 @@ class InventoryScreen:
             pygame.draw.rect(screen, bg,     (sx, sy, self.SZ, self.SZ))
             pygame.draw.rect(screen, border, (sx, sy, self.SZ, self.SZ), 2)
             isz  = self.SZ - 16
-            pygame.draw.rect(screen, item.color, (sx+8, sy+8, isz, isz))
+            spr = asset_mgr.get_item_icon(item.iid) if asset_mgr else None
+            if spr:
+                scaled = pygame.transform.scale(spr, (isz, isz))
+                screen.blit(scaled, (sx + 8, sy + 8))
+            else:
+                pygame.draw.rect(screen, item.color, (sx+8, sy+8, isz, isz))
             if item.stackable and count > 1:
                 draw_text(screen, str(count), sx+self.SZ-20, sy+self.SZ-18, 12, WHITE, False)
             if item.iid in player.hotbar:
@@ -266,8 +276,17 @@ class InventoryScreen:
             item, count = slots[self.cursor]
             ix = px + self.COLS*(self.SZ+self.PAD) + 10
             iy = py + 54
-            draw_text(screen, item.name,             ix, iy,     18, WHITE)
-            draw_text(screen, f"Type: {item.itype}", ix, iy+24,  13, LIGHT_GRAY)
+            # Large item portrait (sprite or coloured square)
+            PORT = 48
+            spr = asset_mgr.get_item_icon(item.iid) if asset_mgr else None
+            if spr:
+                scaled = pygame.transform.scale(spr, (PORT, PORT))
+                screen.blit(scaled, (ix, iy))
+            else:
+                pygame.draw.rect(screen, item.color, (ix, iy, PORT, PORT))
+                pygame.draw.rect(screen, WHITE, (ix, iy, PORT, PORT), 1)
+            draw_text(screen, item.name,             ix + PORT + 6, iy,     18, WHITE)
+            draw_text(screen, f"Type: {item.itype}", ix + PORT + 6, iy+22,  12, LIGHT_GRAY)
             lines = []
             if item.damage:       lines.append(f"Dmg: {item.damage}")
             if item.defense:      lines.append(f"Def: +{item.defense}")
@@ -277,8 +296,8 @@ class InventoryScreen:
             if item.light_radius: lines.append(f"Light: {item.light_radius}t")
             if count > 1:         lines.append(f"Qty: x{count}")
             for li, ln in enumerate(lines):
-                draw_text(screen, ln, ix, iy+44+li*18, 13, LIGHT_GRAY)
-            yo = iy + 44 + len(lines)*18 + 8
+                draw_text(screen, ln, ix, iy + PORT + 6 + li*17, 13, LIGHT_GRAY)
+            yo = iy + PORT + 6 + len(lines)*17 + 8
             desc = item.description
             for li in range(0, min(len(desc), 110), 22):
                 draw_text(screen, desc[li:li+22], ix, yo + (li//22)*16, 12, GRAY)

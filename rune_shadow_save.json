@@ -1,0 +1,45 @@
+{
+  "seed": 12345,
+  "score": 0,
+  "num_players": 1,
+  "players": [
+    {
+      "x": 1283.0,
+      "y": 1305.0,
+      "hp": 100,
+      "max_hp": 100,
+      "mana": 60,
+      "max_mana": 60,
+      "gold": 0,
+      "hotbar": [
+        "knife",
+        "staff",
+        "sling",
+        "candle",
+        "spell_basic",
+        null,
+        null,
+        null
+      ],
+      "aim_mode": "mouse",
+      "inventory": {
+        "knife": 1,
+        "staff": 1,
+        "sling": 1,
+        "candle": 1,
+        "spell_basic": 1,
+        "stone": 15,
+        "mushroom": 3,
+        "herb": 2
+      }
+    }
+  ],
+  "map_key": "town",
+  "dungeon_id": -1,
+  "dungeon_level": 0,
+  "boss_killed": {},
+  "chest_opened": {
+    "town": []
+  },
+  "dungeon_chests": {}
+}
