@@ -24,11 +24,12 @@ import pygame
 from constants  import *
 from generation import build_town, build_biome_map, build_dungeon_level, build_haunted_town
 from game_map   import GameMap, GroundItem
-from entities   import Player, spawn_enemy, Projectile
+from entities   import Player, Enemy, spawn_enemy, Projectile, Princess, Lorekeeper, Trader, Pet
 from items      import make_item, ITEMS, CHEST_LOOT_COMMON, CHEST_LOOT_UNCOMMON, CHEST_LOOT_RARE
 from asset_manager import AssetManager
 from ui import (HUD, InventoryScreen, SettingsScreen,
-                draw_main_menu, draw_game_over, draw_paused, draw_win, draw_text)
+                draw_main_menu, draw_game_over, draw_paused, draw_win, draw_text,
+                draw_npc_dialog, draw_trader_shop)
 import sound_engine
 
 
@@ -252,6 +253,7 @@ class MessageLog:
 # Map typed code → internal tag.  Codes are checked case-insensitively.
 CHEAT_CODES = {
     'GODMODE':   'god',
+    'ANUBIS':    'god',      # 2P-safe godmode (avoids O key)
     'MAXHP':     'maxhp',
     'MAXMANA':   'maxmana',
     'GIVEALL':   'giveall',
@@ -259,6 +261,7 @@ CHEAT_CODES = {
     'RESPAWN':   'respawn',
     'LEVELUP':   'levelup',
     'FULLCLEAR': 'fullclear',
+    'TELE':      'teleport',
 }
 # Max length of any code word — buffer is trimmed to this to avoid unbounded growth
 _CHEAT_MAX_LEN = max(len(k) for k in CHEAT_CODES)
@@ -295,15 +298,27 @@ class Game:
         self._viewport      = pygame.Surface((SCREEN_WIDTH,VIEWPORT_H))
         self._pending_msgs: list = []
         self._cheats        = CheatEngine()
-        self._cheat_buf     = ""   # accumulates typed chars for cheat detection
+        self._cheat_buf     = ""
         self.asset_mgr      = AssetManager()
         self._dungeon_maps: dict  = {}
         self._boss_killed: dict   = {}
-        self._key_tracker   = KeyTracker()   # software N-key-rollover bypass
-        self._descent_pos: dict   = {}   # (dun_id,from_level) -> (px,py)
-        self._prev_state    = ST_MENU   # for settings back-navigation
+        self._key_tracker   = KeyTracker()
+        self._descent_pos: dict   = {}
+        self._prev_state    = ST_MENU
+        # ── New gameplay state (initialised here so load-game always finds them) ──
+        self._princesses: dict    = {9:None,10:None,11:None,12:None}
+        self._princesses_saved: set = set()
+        self._mob_kills: int      = 0
+        self._town_npcs: list     = []
+        self._dialog_npc          = None
+        self._trader_npc    = None
+        self._trader_cursor: int  = 0
+        self._trader_player: int  = 0   # which player is trading
+        self._charmed_mobs: list     = [None, None]  # one pet per player
 
     def run(self):
+        sound_engine.init()
+        sound_engine.play_area_music(MAP_TOWN)   # start music immediately
         while True:
             self.clock.tick(FPS)
             self._handle_events(); self._update(); self._draw()
@@ -325,6 +340,8 @@ class Game:
             elif self._state==ST_INVENTORY: self._ev_inv(ev)
             elif self._state==ST_PAUSED:    self._ev_pause(ev)
             elif self._state==ST_SETTINGS:  self._ev_settings(ev)
+            elif self._state==ST_DIALOG:    self._ev_dialog(ev)
+            elif self._state==ST_TRADER:    self._ev_trader(ev)
             elif self._state in (ST_GAMEOVER,ST_WIN):
                 if ev.type==pygame.KEYDOWN and ev.key==pygame.K_RETURN:
                     self._state=ST_MENU
@@ -379,14 +396,14 @@ class Game:
     def _ev_play(self,ev):
         kb_list=self._settings.keybindings
         if ev.type==pygame.KEYDOWN:
-            # Typed cheat codes (1P only) — accumulate printable chars, test suffixes
-            if self._settings.num_players==1 and ev.unicode and ev.unicode.isprintable():
+            # Typed cheat codes — accumulate printable chars, test suffixes (all player counts)
+            if ev.unicode and ev.unicode.isprintable():
                 self._cheat_buf = (self._cheat_buf + ev.unicode.upper())[-_CHEAT_MAX_LEN:]
                 for code, tag in CHEAT_CODES.items():
                     if self._cheat_buf.endswith(code):
                         self._apply_cheat(tag)
                         self._cheat_buf = ""
-                        return  # don't also process as game action
+                        return
 
             for pi,p in enumerate(self._players):
                 if pi>=self._settings.num_players: break
@@ -402,6 +419,13 @@ class Game:
                         p.attack(self.current_map,self.current_map.entities,
                                  self.projectiles,self._pending_msgs)
                         self._check_chest_smash(pi)
+                        # Register nearby enemies as threat for this player's pet
+                        my_pet = self._charmed_mobs[pi] if pi < len(self._charmed_mobs) else None
+                        if my_pet and my_pet.alive:
+                            for e in self.current_map.entities:
+                                if isinstance(e,Enemy) and e.alive and not isinstance(e,Pet):
+                                    if math.hypot(e.cx-p.cx,e.cy-p.cy) < TILE_SIZE*5:
+                                        my_pet.register_threat(e)
                         # SFX for melee
                         item=p.equipped_item()
                         if item:
@@ -440,6 +464,79 @@ class Game:
         if ev.type!=pygame.KEYDOWN: return
         pi=self._inv_player
         p=self._players[pi] if pi<len(self._players) else self._players[0]
+
+        FEED_TYPES = {'bread','meat','mushroom','herb','potion','mana_pot','elixir',
+                      'blue_flower','magic_dust'}   # items accepted as food/health
+
+        # F = feed charmed pet companion with selected item
+        if ev.key == pygame.K_f:
+            pet = self._charmed_mobs[pi] if pi < len(self._charmed_mobs) else None
+            if pet and pet.alive and isinstance(pet, Pet):
+                slots = list(p.inventory)
+                cursor = self.inv_screen.cursor if hasattr(self.inv_screen,'cursor') else 0
+                # Try selected slot first, then fall back to first available feed item
+                chosen_iid = None
+                if 0 <= cursor < len(slots):
+                    sel_item, sel_cnt = slots[cursor]
+                    if sel_item.iid in FEED_TYPES and sel_cnt > 0:
+                        chosen_iid = sel_item.iid
+                if chosen_iid is None:
+                    for it, cnt in slots:
+                        if it.iid in FEED_TYPES and cnt > 0:
+                            chosen_iid = it.iid; break
+                if chosen_iid:
+                    from items import ITEMS as _I
+                    p.inventory.remove(chosen_iid, 1)
+                    item_def = _I.get(chosen_iid)
+                    hp_restore = getattr(item_def,'hp_restore',0) or pet.max_hp//4
+                    heal = min(hp_restore, pet.max_hp - pet.hp)
+                    pet.hp = min(pet.max_hp, pet.hp + max(heal, hp_restore))
+                    name = item_def.name if item_def else chosen_iid
+                    self.log.add(f"Fed {pet.etype} {name} (+{max(heal,hp_restore)} HP).", (180,255,180))
+                else:
+                    self.log.add("Select a food/health item in inventory first!", GRAY)
+            else:
+                self.log.add("No companion to feed.", GRAY)
+            self._state = ST_PLAY; return
+
+        # G = give selected food/health item to nearest following princess
+        if ev.key == pygame.K_g:
+            from items import ITEMS as _I
+            best_pr = None; best_dist = float('inf')
+            if self._players:
+                p0 = self._players[0]
+                for pr in self._princesses.values():
+                    if pr and pr.state == 'following' and pr.alive:
+                        d = math.hypot(pr.cx-p0.cx, pr.cy-p0.cy)
+                        if d < best_dist:
+                            best_dist = d; best_pr = pr
+            if best_pr:
+                slots = list(p.inventory)
+                cursor = self.inv_screen.cursor if hasattr(self.inv_screen,'cursor') else 0
+                chosen_iid = None
+                if 0 <= cursor < len(slots):
+                    sel_item, sel_cnt = slots[cursor]
+                    if sel_item.iid in FEED_TYPES and sel_cnt > 0:
+                        chosen_iid = sel_item.iid
+                if chosen_iid is None:
+                    for it, cnt in slots:
+                        if it.iid in FEED_TYPES and cnt > 0:
+                            chosen_iid = it.iid; break
+                if chosen_iid:
+                    item_def = _I.get(chosen_iid)
+                    p.inventory.remove(chosen_iid, 1)
+                    hp_restore = getattr(item_def,'hp_restore',0) or 15
+                    heal = min(hp_restore, best_pr.max_hp - best_pr.hp)
+                    best_pr.hp = min(best_pr.max_hp, best_pr.hp + max(heal, hp_restore))
+                    name = item_def.name if item_def else chosen_iid
+                    self.log.add(f"Gave {best_pr.name} {name} (+{max(heal,hp_restore)} HP).",
+                                 (255,200,220))
+                else:
+                    self.log.add("Select a food/health item in inventory first!", GRAY)
+            else:
+                self.log.add("No princess nearby.", GRAY)
+            self._state = ST_PLAY; return
+
         close=self.inv_screen.handle_key(ev,p,self._pending_msgs)
         # Spawn dropped item — process and immediately remove drop messages so
         # they can't fire again on a subsequent keypress (e.g. ESC to close).
@@ -463,6 +560,59 @@ class Game:
             close=True
         if close: self._state=ST_PLAY
 
+    def _ev_dialog(self, ev):
+        """Dismiss/advance NPC dialog with E, Space, Enter, or Escape."""
+        if ev.type != pygame.KEYDOWN: return
+        if ev.key in (pygame.K_e, pygame.K_SPACE, pygame.K_RETURN, pygame.K_u,
+                      pygame.K_ESCAPE, pygame.K_m):
+            if self._dialog_npc:
+                self._dialog_npc.next_page()
+            if ev.key == pygame.K_ESCAPE:
+                self._dialog_npc = None
+                self._state = ST_PLAY
+
+    def _ev_trader(self, ev):
+        """Handle the trader shop UI."""
+        if ev.type != pygame.KEYDOWN: return
+        stock = Trader.STOCK
+        cursor = self._trader_cursor
+        pi = getattr(self, '_trader_player', 0)   # the player who opened the shop
+        p  = self._players[pi] if pi < len(self._players) else self._players[0]
+
+        if ev.key == pygame.K_ESCAPE:
+            self._trader_npc = None; self._state = ST_PLAY; return
+        if ev.key == pygame.K_UP:
+            self._trader_cursor = (cursor - 1) % len(stock); return
+        if ev.key == pygame.K_DOWN:
+            self._trader_cursor = (cursor + 1) % len(stock); return
+
+        if not p: return
+        iid, buy_price, sell_price = stock[cursor]
+        item_def = ITEMS.get(iid)
+
+        # B = buy from trader
+        if ev.key == pygame.K_b:
+            if item_def and p.inventory.gold >= buy_price:
+                if p.inventory.add(make_item(iid), 1):
+                    p.inventory.add_gold(-buy_price)
+                    self.log.add(f"Bought {item_def.name} for {buy_price}g.", WHITE)
+                else:
+                    self.log.add("Inventory full!", RED)
+            else:
+                self.log.add("Not enough gold!" if item_def else "Unknown item.", RED)
+
+        # S = sell to trader (any non-rare item)
+        elif ev.key == pygame.K_s:
+            RARE_ITEMS = {'dragon_blade','shadow_staff','area_blast','void_bolt',
+                          'swiftboots','iron_armor','dragon_scale'}
+            # Find the first owned non-rare item matching cursor iid
+            if p.inventory.has(iid) and iid not in RARE_ITEMS and sell_price > 0:
+                p.inventory.remove(iid, 1)
+                p.inventory.add_gold(sell_price)
+                self.log.add(f"Sold {item_def.name} for {sell_price}g.", WHITE)
+            else:
+                self.log.add("Can't sell that here.", GRAY)
+
     # ── Cheats ───────────────────────────────────────────────────────────────
     def _apply_cheat(self,tag):
         for p in self._players:
@@ -482,7 +632,24 @@ class Game:
         elif tag=="fullclear":
             for e in list(self.current_map.entities): e.hp=0;e.alive=False
             self.log.add("All cleared!",YELLOW)
-        elif tag in("giveall","levelup"): self.log.add(f"Cheat: {tag}",GOLD)
+        elif tag=="teleport":
+            # Warp entire party (players + pet + following princesses) back to town
+            town_map = self._maps.get(MAP_TOWN)
+            if town_map:
+                self.current_map = town_map
+                self._current_map_name = "Town"
+                self.projectiles.clear()
+                mid_tx = TOWN_W // 2; mid_ty = TOWN_H // 2
+                for i, pl in enumerate(self._players):
+                    ox = (i % 2) * 2 - 1   # slight offset per player
+                    pt = town_map.find_walkable_near(mid_tx + ox, mid_ty, 4)
+                    pl.x = pt[0]*TILE_SIZE; pl.y = pt[1]*TILE_SIZE
+                self.camera.snap(self._players, TOWN_W*TILE_SIZE, TOWN_H*TILE_SIZE)
+                self._transport_companions(town_map)
+                sound_engine.play_area_music(MAP_TOWN)
+                self.log.add("TELE: Party warped to town.", PURPLE)
+            else:
+                self.log.add("No town map loaded yet.", RED)
         elif tag in("maxhp","maxmana"): self.log.add(f"Restored.",GREEN)
 
     def _respawn_map(self,gmap):
@@ -539,6 +706,46 @@ class Game:
                         pl.iframes=PLAYER_IFRAMES*2
                 self._save_game(); self.log.add("Shrine heals all — saved!",CYAN)
                 sound_engine.play_sfx('shrine')
+                # Town shrine: save any following princess (alive and following)
+                if self.current_map.map_key == MAP_TOWN:
+                    for did, princess in list(self._princesses.items()):
+                        if princess and princess.state == 'following' and princess.alive:
+                            princess.state = 'saved'
+                            self._princesses_saved.add(did)
+                            self.log.add(f"{princess.name} is SAVED! ♥", (255,140,200))
+                            self._score += 500
+                    if len(self._princesses_saved) == 4:
+                        self._state = ST_WIN
+                # Castle shrine inside dungeon: revive princess if at_shrine
+                elif self.current_map.is_dungeon:
+                    did = self.current_map.dungeon_id
+                    princess = self._princesses.get(did)
+                    if princess and princess.state == 'at_shrine':
+                        princess.state    = 'following'
+                        princess.alive    = True          # ← was missing, caused invisible princess
+                        princess.hp       = princess.max_hp
+                        princess.iframes  = 0
+                        princess.x        = p.cx; princess.y = p.cy
+                        princess.follow_ref = p
+                        princess._trail   = []
+                        if princess not in self.current_map.entities:
+                            self.current_map.entities.append(princess)
+                        self.log.add(f"{princess.name} follows you again!", (255,180,220))
+                return   # shrine handled, skip gate/chest checks below
+
+            # Check NPC interaction (only in town)
+            if self.current_map.map_key == MAP_TOWN:
+                for npc in self._town_npcs:
+                    if abs(npc.cx - p.cx) < TILE_SIZE*1.5 and abs(npc.cy - p.cy) < TILE_SIZE*1.5:
+                        if isinstance(npc, Trader):
+                            self._trader_npc    = npc
+                            self._trader_cursor = 0
+                            self._trader_player = pi   # remember which player is trading
+                            self._state         = ST_TRADER
+                        else:
+                            self._dialog_npc = npc
+                            self._state      = ST_DIALOG
+                        return
 
             # Ground item pickup goes to this player's inventory
             ptx=int(p.cx//TILE_SIZE); pty=int(p.cy//TILE_SIZE)
@@ -606,8 +813,8 @@ class Game:
                           dest_map.width*TILE_SIZE, dest_map.height*TILE_SIZE)
         self.log.add(f"Entered {self._current_map_name}.", ORANGE)
         sound_engine.play_sfx('gate_travel')
-        # Update music for new area
         sound_engine.play_area_music(dest_map_key)
+        self._transport_companions(dest_map)
 
     def _find_gate_spawn(self, gmap, gate_tile_type):
         for y in range(gmap.height):
@@ -631,6 +838,30 @@ class Game:
                 self._populate_biome_ents(gmap)
             self._maps[map_key]=gmap
         return self._maps[map_key]
+
+    def _transport_companions(self, dest_map):
+        """Move Pet and following Princesses to dest_map alongside the player."""
+        p0 = self._players[0] if self._players else None
+        # Transport Pet
+        for pi2, pet in enumerate(self._charmed_mobs):
+            if pet and pet.alive:
+                if pet not in dest_map.entities:
+                    dest_map.entities.append(pet)
+                if p0:
+                    near = dest_map.find_walkable_near(
+                        int(p0.cx//TILE_SIZE), int(p0.cy//TILE_SIZE), 4)
+                    pet.x = near[0]*TILE_SIZE + (TILE_SIZE-pet.SIZE)//2
+                    pet.y = near[1]*TILE_SIZE + (TILE_SIZE-pet.SIZE)//2
+                    pet._trail.clear()
+                pet._threats.clear()
+        # Transport following princesses
+        for did, princess in self._princesses.items():
+            if princess and princess.state == 'following' and princess.alive:
+                if p0:
+                    near = dest_map.find_walkable_near(
+                        int(p0.cx//TILE_SIZE), int(p0.cy//TILE_SIZE), 5)
+                    princess.x = near[0]*TILE_SIZE + (TILE_SIZE-princess.SIZE)//2
+                    princess.y = near[1]*TILE_SIZE + (TILE_SIZE-princess.SIZE)//2
 
     # ── Dungeon Travel ───────────────────────────────────────────────────────
     def _enter_dungeon_from_map(self,gmap,tx,ty):
@@ -662,6 +893,7 @@ class Game:
         self.log.add(f"Entered {self._current_map_name}!",ORANGE)
         sound_engine.play_area_music('', dungeon_id=dun_id)
         sound_engine.play_sfx('stairs_down')
+        self._transport_companions(dmap)
 
     def _ascend_dungeon(self):
         dmap=self.current_map; did=dmap.dungeon_id; lvl=dmap.dungeon_level
@@ -708,6 +940,7 @@ class Game:
         sound_engine.play_sfx('stairs_up')
         sound_engine.play_area_music(self.current_map.map_key,
             self.current_map.dungeon_id if self.current_map.is_dungeon else -1)
+        self._transport_companions(self.current_map)
 
     def _descend_dungeon(self):
         dmap=self.current_map; did=dmap.dungeon_id; lvl=dmap.dungeon_level
@@ -725,12 +958,14 @@ class Game:
             try:
                 e=spawn_enemy(sp['type'],sp['tx'],sp['ty'],is_boss=sp.get('boss',False))
                 dmap.entities.append(e)
-            except Exception: pass
+            except Exception as ex:
+                print(f"[Spawn] Failed to spawn {sp.get('type')}: {ex}")
         for sp in getattr(dmap,'item_spawns',[]):
             try:
                 gi=GroundItem(make_item(sp['iid']),sp['tx'],sp['ty'],sp['count'])
                 dmap.ground_items.append(gi)
-            except Exception: pass
+            except Exception as ex:
+                print(f"[Spawn] Failed to spawn item {sp.get('iid')}: {ex}")
 
     # ── Chest ────────────────────────────────────────────────────────────────
     def _chest_floor_tile(self, gmap, tx, ty):
@@ -840,6 +1075,22 @@ class Game:
         self._dungeon_maps={}; self._maps={}; self._boss_killed={}
         self._descent_pos={}; self._pending_msgs=[]; self._score=0
         self._cheats=CheatEngine(); self._pause_cursor=0; self._cheat_buf=""
+        self._charmed_mobs = [None, None]
+        # Princess / win tracking
+        DRAGON_DUNGEON_IDS = [9, 10, 11, 12]
+        self._princesses: dict = {did: None for did in DRAGON_DUNGEON_IDS}
+        self._princesses_saved: set = set()
+        # Level / mob kill tracking
+        self._mob_kills: int = 0
+        # Town NPCs
+        self._town_npcs: list = []
+        # Active NPC dialog (None = no dialog open)
+        self._dialog_npc = None
+        # Active trader UI
+        self._trader_npc = None
+        self._trader_cursor: int = 0
+        # Charmed companion (only 1 at a time)
+        self._charmed_mob = None
 
         # Init sound if not done yet
         sound_engine.init()
@@ -889,6 +1140,23 @@ class Game:
             if not gmap.walkable(tx,ty): continue
             iid=rng.choice(['mushroom','herb','coin','coin','stone','bread','arrow'])
             gmap.ground_items.append(GroundItem(make_item(iid),tx,ty,rng.randint(1,3)))
+
+        # Place Lorekeeper and Trader in town at fixed offsets from centre
+        cx, cy = TOWN_W // 2, TOWN_H // 2
+        # Find walkable spots near centre
+        npc_spots = []
+        for dy in range(-4, 5):
+            for dx in range(-8, 9):
+                tx2, ty2 = cx + dx, cy + dy
+                if gmap.walkable(tx2, ty2):
+                    npc_spots.append((tx2, ty2))
+        # Pick two well-separated spots
+        if len(npc_spots) >= 2:
+            s1 = npc_spots[len(npc_spots) // 3]
+            s2 = npc_spots[2 * len(npc_spots) // 3]
+            lk = Lorekeeper(s1[0], s1[1])
+            tr = Trader(s2[0], s2[1])
+            self._town_npcs = [lk, tr]
 
     def _populate_biome_ents(self,gmap):
         # Per-map seeded RNG so biome content never depends on load order
@@ -954,6 +1222,16 @@ class Game:
                 'hotbar':p.hotbar,'aim_mode':p.aim_mode,
                 'inventory':{it.iid:cnt for it,cnt in p.inventory._slots},
             })
+        # Serialise princess states
+        princess_data = {}
+        for did, pr in self._princesses.items():
+            if pr is None:
+                princess_data[str(did)] = None
+            else:
+                princess_data[str(did)] = {
+                    'state': pr.state, 'hp': pr.hp,
+                    'x': pr.x, 'y': pr.y,
+                }
         data={
             'seed':self.seed,'score':self._score,
             'num_players':self._settings.num_players,
@@ -965,6 +1243,13 @@ class Game:
             'chest_opened':{mk:list(m.chest_opened) for mk,m in self._maps.items()},
             'dungeon_chests':{f"{k[0]}_{k[1]}":list(v.chest_opened)
                               for k,v in self._dungeon_maps.items()},
+            'princess_data': princess_data,
+            'princesses_saved': list(self._princesses_saved),
+            'mob_kills': self._mob_kills,
+            'charmed_etypes': [
+                (self._charmed_mobs[i].etype if self._charmed_mobs[i] and self._charmed_mobs[i].alive else None)
+                for i in range(2)
+            ],
         }
         try:
             with open(SAVE_FILE,'w') as f: json.dump(data,f,indent=2)
@@ -1037,6 +1322,31 @@ class Game:
             self.camera.snap(self._players,self.current_map.width*TILE_SIZE,
                                             self.current_map.height*TILE_SIZE)
             self.inv_screen=InventoryScreen()
+
+            # Restore princess states
+            self._princesses = {9:None,10:None,11:None,12:None}
+            self._princesses_saved = set()
+            for did_s, pdata in data.get('princess_data',{}).items():
+                did = int(did_s)
+                if pdata is None: continue
+                pr = Princess(did, pdata.get('x',100), pdata.get('y',100))
+                pr.state = pdata.get('state','at_shrine')
+                pr.hp    = pdata.get('hp', pr.max_hp)
+                pr.alive = (pr.state == 'following')
+                self._princesses[did] = pr
+            for did in data.get('princesses_saved', []):
+                self._princesses_saved.add(int(did))
+
+            # Restore mob kills counter
+            self._mob_kills = data.get('mob_kills', 0)
+
+            self._charmed_mobs = [None, None]  # pets not restored on load
+
+            # Re-populate town NPCs
+            town_map = self._maps.get(MAP_TOWN)
+            if town_map:
+                self._populate_town_ents(town_map)
+
             self.log.add("Save loaded.",CYAN); self._state=ST_PLAY; return True
         except Exception as ex: print(f"Load error: {ex}"); return False
 
@@ -1076,10 +1386,33 @@ class Game:
                 mw=gmap.width*TILE_SIZE; mh=gmap.height*TILE_SIZE
                 p.x=max(0,min(p.x,mw-ENTITY_SIZE)); p.y=max(0,min(p.y,mh-ENTITY_SIZE))
 
-        # Enemies (pass all players as targets)
+        # Build combined target list: players + following princess + pet companion
+        # Enemies aggro on and attack all of these exactly like players
+        _targets = list(self._players[:num])
+        for _pr in self._princesses.values():
+            if _pr and _pr.state == 'following' and _pr.alive:
+                _targets.append(_pr)
+        for _pet in self._charmed_mobs:
+            if _pet and _pet.alive:
+                _targets.append(_pet)   # enemies can target either pet
+
+        # Enemies and Pets (pass all targets to enemies; pets update separately)
         for e in list(gmap.entities):
+            if isinstance(e, Princess): continue   # handled separately below
+            if isinstance(e, Pet):
+                if e.alive:
+                    foes = [x for x in gmap.entities
+                            if isinstance(x, Enemy) and x.alive and not isinstance(x, Pet)]
+                    e.update(gmap, foes)
+                else:
+                    gmap.entities.remove(e)
+                    for pi2, pm in enumerate(self._charmed_mobs):
+                        if pm is e:
+                            self._charmed_mobs[pi2] = None
+                            self.log.add(f"P{pi2+1}'s companion has fallen!", (255,100,100))
+                continue
             if e.alive:
-                e.update(self._players[:num],gmap,self.projectiles,self._pending_msgs)
+                e.update(_targets,gmap,self.projectiles,self._pending_msgs)
             else:
                 drops=e.get_drops(self.rng)
                 tx=int(e.cx//TILE_SIZE); ty=int(e.cy//TILE_SIZE)
@@ -1088,8 +1421,38 @@ class Game:
                     gmap.ground_items.append(
                         GroundItem(it,target[0],target[1],1,lifetime=DROPPED_ITEM_LIFETIME_FRAMES))
                 self._score+=10*(5 if e.is_boss else 1)
+                # Killed an enemy — register it was a threat to the pet
+                # (no-op since it's dead, but threat already added on attack)
                 if e.is_boss and gmap.is_dungeon:
                     self._boss_killed[(gmap.dungeon_id,gmap.dungeon_level)]=True
+                    # Level up the nearest player for killing a dungeon boss
+                    if self._players:
+                        p0 = self._players[0]
+                        p0.max_hp   += 20; p0.hp    = p0.max_hp
+                        p0.max_mana += 20; p0.mana  = p0.max_mana
+                        if len(self._players) > 1:
+                            p1 = self._players[1]
+                            p1.max_hp   += 20; p1.hp    = p1.max_hp
+                            p1.max_mana += 20; p1.mana  = p1.max_mana
+                        self.log.add("LEVEL UP! Boss defeated!", (255,215,0))
+                    # Dragon boss: spawn princess
+                    DRAGON_BOSSES = {9:'dragon',10:'frost_dragon',11:'sand_dragon',12:'swamp_dragon'}
+                    if gmap.dungeon_id in DRAGON_BOSSES and e.etype == DRAGON_BOSSES[gmap.dungeon_id]:
+                        princess = Princess(gmap.dungeon_id, e.cx, e.cy)
+                        if self._players:
+                            princess.follow_ref = self._players[0]
+                        gmap.entities.append(princess)
+                        self._princesses[gmap.dungeon_id] = princess
+                        self.log.add(f"{princess.name} is freed! Lead her to the town shrine!",
+                                     (255,180,220))
+                # Non-boss overworld: count toward 100-mob level up
+                if not e.is_boss:
+                    self._mob_kills += 1
+                    if self._mob_kills % 100 == 0:
+                        for p in self._players[:num]:
+                            p.max_hp   += 10; p.hp    = p.max_hp
+                            p.max_mana += 10; p.mana  = p.max_mana
+                        self.log.add(f"LEVEL UP! {self._mob_kills} foes slain!", (255,215,0))
                 if not gmap.is_dungeon and not e.is_boss:
                     gmap.respawn_queue.append([OVERWORLD_MOB_RESPAWN_FRAMES,
                                                {'type':e.etype,'tx':tx,'ty':ty}])
@@ -1124,6 +1487,65 @@ class Game:
                     break
 
         self._process_respawns(gmap)
+
+        # ── Process pending internal signals ──────────────────────────────────
+        # (Feed and give are handled directly in _ev_inv; no deferred signals needed)
+
+        # Charm spell: spawn a Pet for the casting player (each player has their own slot)
+        for p_check in self._players[:num]:
+            if getattr(p_check, 'charm_cast', False):
+                pi_charm = p_check.player_idx
+                p_check.charm_cast = False
+                foes = [e for e in gmap.entities
+                        if isinstance(e, Enemy) and e.alive
+                        and not isinstance(e, Pet)
+                        and not e.is_boss]
+                if foes:
+                    nearest = min(foes, key=lambda e: math.hypot(e.cx-p_check.cx, e.cy-p_check.cy))
+                    if math.hypot(nearest.cx-p_check.cx, nearest.cy-p_check.cy) < TILE_SIZE * 6:
+                        # Release THIS player's current pet only
+                        old_pet = self._charmed_mobs[pi_charm] if pi_charm < len(self._charmed_mobs) else None
+                        if old_pet and old_pet.alive:
+                            old_pet.alive = False
+                        # Spawn new Pet for this player
+                        pet = Pet(nearest)
+                        pet.owner = p_check
+                        nearest.alive = False
+                        gmap.entities.append(pet)
+                        self._charmed_mobs[pi_charm] = pet
+                        self.log.add(f"P{pi_charm+1}: {nearest.name} is charmed!", (200, 80, 255))
+                    else:
+                        p_check.inventory.add(make_item('charm_spell'), 1)
+                        self.log.add("No enemy in charm range — spell returned.", RED)
+                else:
+                    p_check.inventory.add(make_item('charm_spell'), 1)
+                    self.log.add("No enemy nearby — spell returned.", RED)
+
+        # Register threats for pets: any enemy physically close that just hit a pet
+        for pi2, pet in enumerate(self._charmed_mobs):
+            if pet and pet.alive:
+                if getattr(pet, '_was_just_hit', False):
+                    pet._was_just_hit = False
+                    for e in gmap.entities:
+                        if isinstance(e, Enemy) and e.alive and not isinstance(e, Pet):
+                            if math.hypot(e.cx-pet.cx, e.cy-pet.cy) < TILE_SIZE * 3:
+                                pet.register_threat(e)
+                for e in gmap.entities:
+                    if isinstance(e, Enemy) and e.alive and not isinstance(e, Pet):
+                        if e._aggroed and math.hypot(e.cx-pet.cx, e.cy-pet.cy) < TILE_SIZE*3:
+                            pet.register_threat(e)
+
+        # ── Update princess entities ───────────────────────────────────────────
+        for did, princess in list(self._princesses.items()):
+            if princess is None: continue
+            if princess.state == 'following':
+                was_alive = princess.alive
+                princess.update(self._players[:num], gmap.entities, gmap)
+                # Detect the moment she's knocked out → send message
+                if was_alive and not princess.alive:
+                    self.log.add(f"{princess.name} fell! Activate the castle shrine to revive her.",
+                                 (255, 100, 100))
+                    sound_engine.play_sfx('player_hurt')
 
         for text,col in self._pending_msgs:
             if not text.startswith("__"): self.log.add(text,col)
@@ -1167,36 +1589,94 @@ class Game:
         if self._state==ST_GAMEOVER: draw_game_over(self.screen,self._score); return
         if self._state==ST_WIN:      draw_win(self.screen,self._score); return
 
-        if self._state in(ST_PLAY,ST_INVENTORY,ST_PAUSED,ST_SETTINGS):
+        if self._state in(ST_PLAY,ST_INVENTORY,ST_PAUSED,ST_SETTINGS,ST_DIALOG,ST_TRADER):
             vp=self._viewport; vp.fill((10,10,14))
             cx,cy=self.camera.ix,self.camera.iy; gmap=self.current_map
-            gmap.draw(vp,cx,cy,
-                      self._players[0].x,self._players[0].y,
-                      self._players[0].light_radius,self.asset_mgr)
+            p1=self._players[0]
+            # Collect extra light sources (P2 onwards)
+            extra_lights = [(pl.x, pl.y, pl.light_radius)
+                            for pl in self._players[1:] if pl.alive]
+            gmap.draw(vp, cx, cy, p1.x, p1.y, p1.light_radius,
+                      self.asset_mgr, extra_lights=extra_lights)
+            def _best_brightness(ecx, ecy):
+                return gmap.get_brightness_at(
+                    ecx, ecy, p1.x, p1.y, p1.light_radius,
+                    extra_lights=extra_lights)
             for e in gmap.entities:
-                b=gmap.get_brightness_at(e.cx,e.cy,
-                                         self._players[0].x,self._players[0].y,
-                                         self._players[0].light_radius)
+                b=_best_brightness(e.cx,e.cy)
                 e.draw(vp,cx,cy,self.asset_mgr,brightness=b)
+                # Green ring around any pet companion
+                for _pet in self._charmed_mobs:
+                    if e is _pet and e.alive:
+                        sx2=int(e.x)-cx; sy2=int(e.y)-cy
+                        pygame.draw.rect(vp,(80,255,80),(sx2-2,sy2-2,e.SIZE+4,e.SIZE+4),2)
             for proj in self.projectiles: proj.draw(vp,cx,cy,self.asset_mgr)
             for p in self._players: p.draw(vp,cx,cy,self.asset_mgr)
+            # Draw town NPCs
+            if gmap.map_key == MAP_TOWN:
+                for npc in self._town_npcs:
+                    npc.draw(vp, cx, cy, self.asset_mgr)
+            # Draw following princesses
+            for did, princess in self._princesses.items():
+                if princess and princess.state == 'following':
+                    princess.draw(vp, cx, cy)
             self.screen.blit(vp,(0,0))
             self.hud.draw(self.screen,self._players,self._current_map_name,
                           self.log.recent(4),self.asset_mgr,
                           self._settings.difficulty,self._cheats.display,
                           self._settings.num_players)
+            # Princess status bar
+            self._draw_princess_status()
             self._draw_prompts(cx,cy,gmap)
 
         if self._state==ST_INVENTORY:
             pi=self._inv_player
             p=self._players[pi] if pi<len(self._players) else self._players[0]
             self.inv_screen.draw(self.screen,p,self.asset_mgr,pi)
+            pet = self._charmed_mobs[pi] if pi < len(self._charmed_mobs) else None
+            if pet and pet.alive and isinstance(pet, Pet):
+                draw_text(self.screen,
+                    f"[F] Feed {pet.etype}  HP:{pet.hp}/{pet.max_hp}",
+                    20, VIEWPORT_H-44, 14, (180,255,180))
+            # G hint for princess
+            for pr in self._princesses.values():
+                if pr and pr.state == 'following' and pr.alive:
+                    draw_text(self.screen,
+                        f"[G] Give food to {pr.name}  HP:{pr.hp}/{pr.max_hp}",
+                        20, VIEWPORT_H-26, 14, (255,200,220))
+                    break
         if self._state==ST_PAUSED:
             draw_paused(self.screen,self._pause_cursor,os.path.exists(SAVE_FILE))
         if self._state==ST_SETTINGS:
             self.settings_screen.draw(self.screen)
+        if self._state==ST_DIALOG and self._dialog_npc:
+            draw_npc_dialog(self.screen, self._dialog_npc)
+        if self._state==ST_TRADER and self._trader_npc:
+            tp = self._players[getattr(self,'_trader_player',0)] if self._players else None
+            draw_trader_shop(self.screen, self._trader_npc, self._trader_cursor,
+                             tp.inventory.gold if tp else 0)
 
-    def _draw_prompts(self,cam_x,cam_y,gmap):
+    def _draw_princess_status(self):
+        """Small princess save tracker in top-right corner."""
+        NAMES_SHORT = {9:"Lyra",10:"Frost",11:"Sola",12:"Mira"}
+        COLORS      = {9:(255,180,210),10:(180,220,255),11:(255,220,150),12:(150,220,180)}
+        x0 = SCREEN_WIDTH - 120; y0 = 8
+        draw_text(self.screen, "Princesses:", x0, y0, 11, (200,180,200))
+        for i, did in enumerate([9,10,11,12]):
+            p = self._princesses.get(did)
+            name = NAMES_SHORT[did]
+            col  = COLORS[did]
+            if did in self._princesses_saved:
+                status = "♥ SAVED"; col = (255,215,0)
+            elif p is None:
+                status = "?"; col = DARK_GRAY
+            elif p.state == 'following':
+                status = "→ Follow"; col = (180,255,180)
+            else:
+                status = "✗ castle"; col = (180,100,100)
+            draw_text(self.screen, f"{name}: {status}", x0, y0+16+i*14, 11, col)
+
+    def _draw_prompts(self, cam_x, cam_y, gmap):
         # Show prompts near P1 (primary player) for now
         p=self._players[0]; fx,fy=p.facing
         tx=int((p.cx+fx*TILE_SIZE*0.6)//TILE_SIZE)
@@ -1211,6 +1691,15 @@ class Game:
         elif t==T_CHEST and (tx,ty) not in gmap.chest_opened: msg="[E] Open Chest  [SPACE/ATK] Smash chest"
         elif t==T_CHEST_OPEN:  msg="[SPACE/ATK] Smash opened chest"
         elif t==T_SHRINE:      msg="[E/KPEnter] Shrine (Heal All + Save)"
+        # NPC proximity hints
+        if self.current_map.map_key == MAP_TOWN and self._players:
+            p0 = self._players[0]
+            for npc in self._town_npcs:
+                if abs(npc.cx - p0.cx) < TILE_SIZE*1.5 and abs(npc.cy - p0.cy) < TILE_SIZE*1.5:
+                    npc_type = "Trade (B/S)" if hasattr(npc, 'STOCK') else "Talk"
+                    msg = f"[E] {npc.name}: {npc_type}"
+                    sx = int(npc.x) - cam_x; sy = int(npc.y) - cam_y - 24
+                    break
         for player in self._players:
             ptx=int(player.cx//TILE_SIZE); pty=int(player.cy//TILE_SIZE)
             for gi in gmap.ground_items:

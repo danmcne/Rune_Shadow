@@ -454,7 +454,7 @@ _ICON_SHAPES = {
     'spell_frost':     ((140, 200, 255),  'scroll'),
     'spell_bolt':      (YELLOW,           'scroll'),
     'spell_basic':     (CYAN,             'scroll'),
-    'area_blast':      ((180, 80, 255),   'orb'),
+    'charm_spell':     ((200, 80, 255),   'orb'),
     'void_bolt':       ((80, 0, 180),     'orb'),
     # ── Armour ────────────────────────────────────────────────────────────────
     'shield':          (GRAY,             'shield'),

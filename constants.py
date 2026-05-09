@@ -167,6 +167,8 @@ ST_GAMEOVER  = 'gameover'
 ST_PAUSED    = 'paused'
 ST_WIN       = 'win'
 ST_SETTINGS  = 'settings'
+ST_DIALOG    = 'dialog'
+ST_TRADER    = 'trader'
 
 # ─── Map Keys ─────────────────────────────────────────────────────────────────
 MAP_TOWN  = 'town'

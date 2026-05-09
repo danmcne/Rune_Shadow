@@ -7,6 +7,10 @@ import pygame
 from constants import *
 from items import ITEMS
 
+def _get_Trader():
+    from entities import Trader
+    return Trader
+
 _fonts = {}
 def font(size):
     if size not in _fonts:
@@ -175,19 +179,19 @@ class InventoryScreen:
         elif k == pygame.K_RIGHT: self.cursor = (self.cursor + 1) % max(1, n)
 
         elif k in (pygame.K_RETURN, pygame.K_e):
+            # Enter/E → always EQUIP to hotbar (even consumables go to a slot)
             if 0 <= self.cursor < n:
                 item, _ = slots[self.cursor]
-                if item.itype == IT_CONSUMABLE:
-                    player.use_item(item.iid, messages)
-                elif item.itype not in (IT_CURRENCY, IT_INGREDIENT, IT_AMMO):
+                if item.itype in (IT_CURRENCY, IT_INGREDIENT):
+                    messages.append(("Can't equip that.", GRAY))
+                else:
                     target = next((i for i in range(HOTBAR_SLOTS)
                                    if player.hotbar[i] is None), player.equipped)
                     player.hotbar[target] = item.iid
                     messages.append((f"Equipped {item.name} → slot {target+1}.", YELLOW))
-                else:
-                    messages.append(("Can't equip that.", GRAY))
 
         elif k == pygame.K_SPACE:
+            # Space → USE immediately (consumables only)
             if 0 <= self.cursor < n:
                 item, _ = slots[self.cursor]
                 if item.itype == IT_CONSUMABLE:
@@ -303,15 +307,16 @@ class InventoryScreen:
                 draw_text(screen, desc[li:li+22], ix, yo + (li//22)*16, 12, GRAY)
             yo += 72
             if item.itype == IT_CONSUMABLE:
-                draw_text(screen, "[Enter/Space]=Use", ix, yo,    13, GREEN)
+                draw_text(screen, "[E]=Equip to hotbar", ix, yo,    13, CYAN)
+                draw_text(screen, "[Space]=Use now",      ix, yo+16, 13, GREEN)
             else:
-                draw_text(screen, "[Enter/E]=Equip",   ix, yo,    13, CYAN)
-                draw_text(screen, "[U]=Unequip",        ix, yo+16, 13, YELLOW)
-            draw_text(screen, "[D]=Drop",               ix, yo+32, 13, ORANGE)
+                draw_text(screen, "[E]=Equip to hotbar",  ix, yo,    13, CYAN)
+                draw_text(screen, "[U]=Unequip",           ix, yo+16, 13, YELLOW)
+            draw_text(screen, "[D]=Drop",                  ix, yo+32, 13, ORANGE)
 
         # Footer controls
         draw_text(screen,
-            "[Arrows]=Nav  [E]=Equip  [Space]=Use  [U]=Unequip  [D]=Drop  [1-8]=Slot  [I/ESC]=Close",
+            "[Arrows]=Nav  [E]=Equip  [Space]=Use  [U]=Unequip  [D]=Drop  [1-8]=Slot  [F]=Feed Pet  [G]=Give Princess  [Q/ESC]=Close",
             px+4, py+self.PANEL_H-22, 11, (100,100,130), False)
 
 
@@ -522,9 +527,74 @@ def draw_paused(screen, cursor=0, has_save=True):
               px+10, py+ph-22, 11, (100,100,130), False)
 
 
+def draw_npc_dialog(screen, npc):
+    """Speech-bubble style dialog panel for NPCs."""
+    W, H = SCREEN_WIDTH, VIEWPORT_H
+    # Semi-transparent panel at bottom of viewport
+    panel = pygame.Surface((W - 40, 140), pygame.SRCALPHA)
+    panel.fill((15, 15, 30, 220))
+    pygame.draw.rect(panel, npc.color, (0, 0, W-40, 140), 3, border_radius=6)
+    screen.blit(panel, (20, H - 160))
+
+    # NPC name
+    draw_text(screen, npc.name, 34, H - 154, 16, npc.color)
+
+    # Dialog text (word-wrap at 60 chars)
+    text = npc.current_text()
+    lines = text.split('\n')
+    for li, line in enumerate(lines[:5]):
+        draw_text(screen, line, 34, H - 136 + li * 20, 14, WHITE, shadow=False)
+
+    # Page indicator and hint
+    page_str = f"[{npc.page+1}/{len(npc.pages)}]"
+    draw_text(screen, page_str, W - 80, H - 28, 12, GRAY)
+    draw_text(screen, "E/Space=Next  ESC=Close", W//2 - 100, H - 28, 12, (120,120,140))
+
+
+def draw_trader_shop(screen, trader, cursor, player_gold):
+    """Full-screen trader shop overlay."""
+    W, H = SCREEN_WIDTH, VIEWPORT_H
+    overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+    overlay.fill((5, 10, 20, 220))
+    screen.blit(overlay, (0, 0))
+
+    panel_w, panel_h = W - 80, H - 60
+    px, py = 40, 30
+    pygame.draw.rect(screen, (20, 20, 40), (px, py, panel_w, panel_h), border_radius=8)
+    pygame.draw.rect(screen, trader.color, (px, py, panel_w, panel_h), 3, border_radius=8)
+
+    draw_text(screen, f"~~ {trader.name}'s Wares ~~", px + 20, py + 10, 20, trader.color)
+    draw_text(screen, f"Your gold: {player_gold}g", px + 20, py + 36, 15, GOLD)
+    draw_text(screen, "[B]uy   [S]ell   ESC=Close", W - 300, py + 36, 13, GRAY)
+
+    row_h = 26; y0 = py + 65
+    visible = 14
+    start = max(0, cursor - visible // 2)
+    Trader = _get_Trader()
+    end   = min(len(Trader.STOCK), start + visible)
+
+    for ri, (iid, buy, sell) in enumerate(Trader.STOCK[start:end]):
+        idx  = start + ri
+        item = ITEMS.get(iid)
+        if item is None: continue
+        ry = y0 + ri * row_h
+        bg = (40, 40, 80) if idx == cursor else (18, 18, 32)
+        pygame.draw.rect(screen, bg, (px+4, ry, panel_w-8, row_h-2), border_radius=4)
+        draw_text(screen, item.name,         px + 14, ry + 4, 13, WHITE)
+        draw_text(screen, f"Buy:{buy}g",     px + 280, ry + 4, 13, CYAN)
+        sell_str = f"Sell:{sell}g" if sell > 0 else "No resale"
+        draw_text(screen, sell_str,          px + 380, ry + 4, 13, YELLOW)
+        draw_text(screen, item.description[:34], px + 14, ry + 16, 11, (140,140,160))
+
+
 def draw_win(screen, score):
     screen.fill((5, 10, 5))
-    draw_text(screen, "VICTORY!", SCREEN_WIDTH//2-110, 180, 60, GOLD)
-    draw_text(screen, "The darkness is vanquished.", SCREEN_WIDTH//2-185, 270, 22, WHITE)
-    draw_text(screen, f"Score: {score}", SCREEN_WIDTH//2-60, 318, 28, YELLOW)
-    draw_text(screen, "Press ENTER to return to menu", SCREEN_WIDTH//2-190, 390, 22, GRAY)
+    draw_text(screen, "VICTORY!", SCREEN_WIDTH//2-110, 140, 60, GOLD)
+    draw_text(screen, "All four princesses are free.", SCREEN_WIDTH//2-195, 225, 22, (255,200,220))
+    draw_text(screen, "The darkness is vanquished.", SCREEN_WIDTH//2-185, 255, 22, WHITE)
+    names = [("Princess Lyra",(255,180,210)),("Princess Frostine",(180,220,255)),
+             ("Princess Sola",(255,220,150)),("Princess Mira",(150,220,180))]
+    for i,(nm,col) in enumerate(names):
+        draw_text(screen, f"♥ {nm}", SCREEN_WIDTH//2-90, 295+i*24, 18, col)
+    draw_text(screen, f"Score: {score}", SCREEN_WIDTH//2-60, 400, 28, YELLOW)
+    draw_text(screen, "Press ENTER to return to menu", SCREEN_WIDTH//2-190, 450, 22, GRAY)

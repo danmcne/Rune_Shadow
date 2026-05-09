@@ -955,21 +955,37 @@ def _populate_dungeon(gmap, rooms, dun_id, level, rng):
     if level == cfg['levels'] - 1:
         passable = {cfg['floor'], T_FLOOR, T_CAVE_FLOOR}
         dist = _compute_wall_distance(gmap, passable)
-        # Dragons need extra clearance (SIZE = 3×ENTITY_SIZE ≈ 3 tiles)
         is_dragon = 'dragon' in boss_type
-        min_clear = 5 if is_dragon else 2
+        min_clear = 4 if is_dragon else 2
+
+        # Search in expanding rings around the shrine until we find a clear spot
         candidates = []
-        for dy in range(-10, 11):
-            for dx in range(-10, 11):
-                nbx, nby = bx+dx, by+dy
-                if not gmap.in_bounds(nbx, nby): continue
-                if gmap.get(nbx, nby) not in passable: continue
-                if dist[nby][nbx] is not None and dist[nby][nbx] >= min_clear:
-                    candidates.append((nbx, nby))
+        for radius in (8, 14, 20):
+            for dy in range(-radius, radius+1):
+                for dx in range(-radius, radius+1):
+                    nbx, nby = bx+dx, by+dy
+                    if abs(dx) < 3 and abs(dy) < 3: continue  # too close to shrine
+                    if not gmap.in_bounds(nbx, nby): continue
+                    if gmap.get(nbx, nby) not in passable: continue
+                    d = dist[nby][nbx]
+                    if d is not None and d >= min_clear:
+                        candidates.append((nbx, nby))
+            if candidates:
+                break
+
         if candidates:
             nbx, nby = rng.choice(candidates)
         else:
-            nbx, nby = bx+2, by+2
+            # Last-resort: find ANY passable floor tile away from shrine
+            nbx, nby = bx, by
+            for ty2 in range(max(0,by-15), min(gmap.height,by+15)):
+                for tx2 in range(max(0,bx-15), min(gmap.width,bx+15)):
+                    if abs(tx2-bx) < 3 and abs(ty2-by) < 3: continue
+                    if gmap.get(tx2,ty2) in passable:
+                        nbx, nby = tx2, ty2; break
+                else: continue
+                break
+
         gmap.enemy_spawns.append({'type': boss_type, 'tx': nbx, 'ty': nby,
                                    'boss': True, 'level': level})
 

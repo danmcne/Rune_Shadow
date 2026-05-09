@@ -45,11 +45,13 @@ class Entity:
 
     def try_move(self, dx, dy, gmap, ghost=False, water_walker=False):
         sz=self.SIZE
+        # Clamp to map bounds (prevents ghosts wandering off-edge)
+        mw = gmap.width  * TILE_SIZE; mh = gmap.height * TILE_SIZE
         if dx!=0:
-            nx=self.x+dx
+            nx=max(0, min(self.x+dx, mw-sz-1))
             if ghost or not self._tile_hit(nx,self.y,sz,gmap,water_walker): self.x=nx
         if dy!=0:
-            ny=self.y+dy
+            ny=max(0, min(self.y+dy, mh-sz-1))
             if ghost or not self._tile_hit(self.x,ny,sz,gmap,water_walker): self.y=ny
 
     def _tile_hit(self, x, y, sz, gmap, water_walker=False):
@@ -69,7 +71,7 @@ class Entity:
         else: self.animator.trigger_hurt()
         return actual
 
-    def draw(self, surf, cam_x, cam_y, asset_mgr=None):
+    def draw(self, surf, cam_x, cam_y, asset_mgr=None, brightness=255):
         sx=int(self.x)-cam_x; sy=int(self.y)-cam_y; s=self.SIZE
         if sx+s<0 or sx>surf.get_width() or sy+s<0 or sy>surf.get_height(): return
         sprite=asset_mgr.get_entity_surface(self.animator) if asset_mgr else None
@@ -106,6 +108,8 @@ class Player(Entity):
         self.berserk_frames = 0
         # boomerang: block re-throw while projectile is still in flight
         self._boomerang_in_flight = False
+        # charm_spell: persistent flag checked by game._update() regardless of state
+        self.charm_cast = False
         self._init_inventory()
 
     def _init_inventory(self):
@@ -117,9 +121,15 @@ class Player(Entity):
         self.hotbar=['knife','staff','sling','candle','spell_basic',None,None,None]
 
     def equipped_item(self):
-        iid=self.hotbar[self.equipped]
-        if iid and self.inventory.has(iid):
-            from items import ITEMS; return ITEMS.get(iid)
+        # First sweep: clear any hotbar slots whose item is no longer owned
+        from items import ITEMS as _ITEMS
+        for i in range(HOTBAR_SLOTS):
+            iid = self.hotbar[i]
+            if iid and not self.inventory.has(iid):
+                self.hotbar[i] = None
+        iid = self.hotbar[self.equipped]
+        if iid:
+            return _ITEMS.get(iid)
         return None
 
     def cycle_hotbar(self, d): self.equipped=(self.equipped+d)%HOTBAR_SLOTS
@@ -133,7 +143,7 @@ class Player(Entity):
         from items import ITEMS
         self.defense=0; speed_bonus=0.0
         for iid in self.hotbar:
-            if iid:
+            if iid and self.inventory.has(iid):   # only count items we actually own
                 it=ITEMS.get(iid)
                 if it:
                     if it.itype==IT_LIGHT: base=max(base,it.light_radius)
@@ -158,10 +168,11 @@ class Player(Entity):
             fx,fy=self.facing
             if fx!=0 or fy!=0: self.aim_dir=(float(fx),float(fy))
 
-        # Autoaim snap to nearest enemy in radius
+        # Autoaim snap to nearest enemy in radius (never target Pet or Princess)
         best_e=None
         best_dot=-1.0 if self.aim_mode=='auto' else 0.3
         for e in enemies:
+            if isinstance(e, (Pet, Princess)): continue   # skip companions
             if not e.alive: continue
             ed=math.hypot(e.cx-self.cx,e.cy-self.cy)
             if ed>AUTOAIM_RADIUS or ed==0: continue
@@ -185,6 +196,7 @@ class Player(Entity):
         if   item.itype==IT_WEAPON:     self._melee(item,gmap,enemies,messages)
         elif item.itype==IT_RANGED:     self._ranged(item,projectiles,messages)
         elif item.itype==IT_MAGIC:      self._magic(item,projectiles,messages)
+        elif item.itype==IT_CONSUMABLE: self.use_item(item.iid,messages); return
         elif item.itype==IT_LIGHT:      messages.append(("Holding light.",YELLOW)); return
         self.attack_cooldown=item.cooldown if item else 20
 
@@ -196,6 +208,8 @@ class Player(Entity):
         hit=False
         berserk_mult = 2.0 if self.berserk_frames > 0 else 1.0
         for e in enemies:
+            if isinstance(e, (Pet, Princess)): continue   # never harm companions
+            if isinstance(e, Player): continue             # never harm other player
             if e.alive and atk.colliderect(e.rect):
                 dmg=max(1,int((item.damage-e.defense)*berserk_mult)); e.take_damage(dmg)
                 if hasattr(e,'on_attacked'): e.on_attacked()
@@ -250,6 +264,10 @@ class Player(Entity):
             if iid=='berserk_draught':
                 self.berserk_frames=600   # 10 seconds
                 messages.append(("BERSERK! Damage x2 for 10s!",RED))
+            if iid=='charm_spell':
+                # Set a persistent flag on the player — survives state transitions
+                self.charm_cast = True
+                self.inventory.remove(iid,1); return True
             self.inventory.remove(iid,1); return True
         return False
 
@@ -355,7 +373,7 @@ class Player(Entity):
         if dx and ok(self.x+dx,self.y): self.x+=dx
         if dy and ok(self.x,self.y+dy): self.y+=dy
 
-    def draw(self, surf, cam_x, cam_y, asset_mgr=None):
+    def draw(self, surf, cam_x, cam_y, asset_mgr=None, brightness=255):
         sx=int(self.x)-cam_x; sy=int(self.y)-cam_y
         # Draw dead body first (stays at death location)
         if self.is_ghost and self.death_x is not None:
@@ -511,6 +529,7 @@ class Projectile:
         r=self.rect
         if self.owner=='player':
             for e in enemies:
+                if isinstance(e, (Pet, Princess, Player)): continue
                 if e.alive and r.colliderect(e.rect):
                     dmg=e.take_damage(self.damage)
                     if hasattr(e,'on_attacked'): e.on_attacked()
@@ -568,9 +587,13 @@ class Enemy(Entity):
         super().__init__(x,y,color,hp*(3 if is_boss else 1),etype)
         self.name=name;self.speed=speed;self.etype=etype;self.is_boss=is_boss
         self.defense=self.DEFENSE;self.SIZE=ENTITY_SIZE*2 if is_boss else ENTITY_SIZE
+        self.damage=self.ATTACK_DAMAGE          # instance copy for charmed-mob use
+        self.attack_range=self.ATTACK_RANGE     # instance copy
         self._state='wander';self._wander_dir=(0.0,0.0);self._wander_timer=0
         self._attack_cool=0;self._stun_timer=0;self._proj_cool=0
         self._rng=random.Random(id(self));self._aggroed=False;self._aggro_src='none'
+        self.charmed    = False   # True when player uses charm_spell
+        self.charmed_by = None    # Player reference
 
     def on_attacked(self):
         if self.AGGRO_TYPE in('attack','sight'):
@@ -587,6 +610,39 @@ class Enemy(Entity):
     def update(self, players, gmap, projectiles, messages):
         """players is a list of Player instances."""
         if not self.alive: return
+
+        # ── Charmed mob ──────────────────────────────────────────────────────
+        if self.charmed:
+            owner = self.charmed_by
+            # Find nearest hostile enemy to chase
+            all_ents = gmap.entities if gmap else []
+            foes = [e for e in all_ents
+                    if e is not self and e.alive and not getattr(e,'charmed',False)]
+            if foes:
+                nearest_foe = min(foes, key=lambda e: math.hypot(e.cx-self.cx, e.cy-self.cy))
+                dfx = nearest_foe.cx - self.cx; dfy = nearest_foe.cy - self.cy
+                dist_foe = math.hypot(dfx, dfy)
+                if dist_foe < TILE_SIZE * 6:   # aggro range for charmed mob
+                    if dist_foe < self.ATTACK_RANGE:
+                        # Attack the foe
+                        if self._attack_cool <= 0:
+                            nearest_foe.take_damage(self.damage)
+                            self._attack_cool = 40
+                            messages.append((f"{self.name} hits {nearest_foe.name}!", (180,255,180)))
+                    else:
+                        self.try_move(dfx/dist_foe*self.speed, dfy/dist_foe*self.speed,
+                                      gmap, ghost=self._is_ghost(), water_walker=self._is_water_walker())
+                    self.animator.tick(); return
+            # No foes nearby — follow owner
+            if owner:
+                dpx = owner.cx - self.cx; dpy = owner.cy - self.cy
+                dist_p = math.hypot(dpx, dpy)
+                if dist_p > TILE_SIZE * 2:
+                    self.try_move(dpx/dist_p*self.speed*0.7, dpy/dist_p*self.speed*0.7,
+                                  gmap, ghost=self._is_ghost(), water_walker=self._is_water_walker())
+            if self._attack_cool > 0: self._attack_cool -= 1
+            self.animator.tick(); return
+
         target=self._nearest_player(players)
         dist=self.dist_to(target)
         if self._stun_timer>0:
@@ -908,3 +964,434 @@ def spawn_enemy(etype,tx,ty,is_boss=False):
     if cls is Dragon:
         return Dragon(px,py,is_boss=is_boss,variant=etype)
     return cls(px,py,is_boss=is_boss)
+
+
+# ── Princess ──────────────────────────────────────────────────────────────────
+def _trail_follow_pos(trail, owner, standoff):
+    """Return a point `standoff` pixels behind owner in the trail."""
+    for cx, cy in reversed(trail):
+        if math.hypot(cx-owner.cx, cy-owner.cy) > standoff:
+            return cx, cy
+    return owner.cx, owner.cy
+
+
+def _smooth_follow(cx, cy, x, y, trail, owner, vx, vy,
+                   speed, ideal_tiles, wangle, result):
+    """
+    Spring-damper + wander steering for Pet and Princess.
+    Returns new (x, y) and stores smoothed velocity + wander angle on result.
+
+    * Spring pulls toward the "ideal ring" at `ideal_tiles` tiles from owner.
+    * Wander adds continuous smooth random drift (random-walk angle, no timer).
+    * Velocity is smoothed each frame → no jitter or discontinuous jumps.
+    """
+    import random as _rng_m
+    IDEAL  = ideal_tiles * TILE_SIZE
+    dist   = math.hypot(owner.cx - cx, owner.cy - cy)
+
+    # ── Spring force toward ideal ring ─────────────────────────────────────
+    spring_x = spring_y = 0.0
+    if dist > 0.5:
+        dx = owner.cx - cx; dy = owner.cy - cy
+        d  = math.hypot(dx, dy)
+        # signed displacement from ideal ring: positive = too far, negative = too close
+        disp = d - IDEAL
+        k    = 0.18   # spring stiffness (tune: higher = snappier)
+        force = k * disp
+        spring_x = (dx/d) * force
+        spring_y = (dy/d) * force
+
+    # ── Wander force (smooth random walk in angle space) ──────────────────
+    # Angle drifts by a small Gaussian step each frame — no sudden direction flips
+    new_wangle = wangle + _rng_m.gauss(0, 0.08)
+    wander_strength = speed * 0.25   # wander at 25 % of max speed
+    wander_x = math.cos(new_wangle) * wander_strength
+    wander_y = math.sin(new_wangle) * wander_strength
+    # Scale wander down when far from owner so it doesn't fight the spring
+    if dist > IDEAL * 1.5:
+        wf = max(0.0, 1.0 - (dist - IDEAL * 1.5) / IDEAL)
+        wander_x *= wf; wander_y *= wf
+
+    # ── Desired velocity = spring + wander, clamped to max speed ──────────
+    des_x = spring_x + wander_x
+    des_y = spring_y + wander_y
+    des_spd = math.hypot(des_x, des_y)
+    if des_spd > speed:
+        des_x = des_x / des_spd * speed
+        des_y = des_y / des_spd * speed
+
+    # ── Smooth velocity (low-pass / exponential moving average) ───────────
+    ALPHA = 0.22   # smoothing factor; lower = more inertia, less jitter
+    new_vx = vx * (1 - ALPHA) + des_x * ALPHA
+    new_vy = vy * (1 - ALPHA) + des_y * ALPHA
+
+    # ── Apply and store state ──────────────────────────────────────────────
+    result._vx     = new_vx
+    result._vy     = new_vy
+    result._wangle = new_wangle
+
+    return x + new_vx, y + new_vy
+
+
+class Princess:
+    """A rescued princess that follows the player to the town shrine.
+    Enemies treat her like a player target (she has alive, cx, cy, is_ghost).
+    """
+    SIZE = 20
+    NAMES  = {9:"Princess Lyra",10:"Princess Frostine",11:"Princess Sola",12:"Princess Mira"}
+    COLORS = {9:(255,180,210),10:(180,220,255),11:(255,220,150),12:(150,220,180)}
+
+    def __init__(self, dungeon_id, x, y):
+        self.dungeon_id = dungeon_id
+        self.name       = self.NAMES.get(dungeon_id, "Princess")
+        self.color      = self.COLORS.get(dungeon_id, (255,180,210))
+        self.x          = float(x)
+        self.y          = float(y)
+        self.hp         = 40
+        self.max_hp     = 40
+        self.defense    = 0          # needed so melee damage calc works
+        self.iframes    = 0
+        # Player-compatible flags so enemies can target her
+        self.alive      = True
+        self.is_ghost   = False
+        self.player_idx = -1      # marks her as non-player for some checks
+        # state: 'following' → chase player; 'at_shrine' → wait in castle; 'saved'
+        self.state      = 'following'
+        self.follow_ref = None
+        self._trail     = []
+        self._vx = self._vy = 0.0   # smoothed velocity for spring-damper
+        self._wangle    = 0.0       # wander angle (random-walk)
+
+    @property
+    def cx(self): return self.x + self.SIZE / 2
+    @property
+    def cy(self): return self.y + self.SIZE / 2
+    @property
+    def rect(self): return pygame.Rect(int(self.x), int(self.y), self.SIZE, self.SIZE)
+
+    def take_damage(self, dmg, difficulty=0):
+        """Called by enemies that hit her. Returns actual damage dealt."""
+        if self.iframes > 0 or not self.alive: return 0
+        self.hp       = max(0, self.hp - max(1, dmg))
+        self.iframes  = 90
+        if self.hp <= 0:
+            self.alive     = False
+            self.state     = 'at_shrine'
+            self.follow_ref = None
+        return dmg
+
+    def dist_to(self, other):
+        return math.hypot(other.cx - self.cx, other.cy - self.cy)
+
+    def update(self, players, enemies, gmap=None):
+        if self.state != 'following': return
+        if self.iframes > 0:
+            self.iframes -= 1
+            if self.iframes == 0 and not self.alive:
+                return
+
+        # Reattach to nearest living non-ghost player
+        if self.follow_ref is None or not getattr(self.follow_ref,'alive',False):
+            living = [p for p in players
+                      if getattr(p,'alive',False) and not getattr(p,'is_ghost',False)
+                      and getattr(p,'player_idx',-1) >= 0]
+            if living:
+                self.follow_ref = min(living,
+                    key=lambda p: math.hypot(p.cx-self.cx, p.cy-self.cy))
+
+        owner = self.follow_ref
+        if owner and self.alive:
+            # Update trail
+            last = self._trail[-1] if self._trail else None
+            if last is None or math.hypot(owner.cx-last[0], owner.cy-last[1]) > TILE_SIZE*0.5:
+                self._trail.append((owner.cx, owner.cy))
+                if len(self._trail) > 40: self._trail.pop(0)
+
+            nx, ny = _smooth_follow(
+                self.cx, self.cy, self.x, self.y,
+                self._trail, owner,
+                vx=self._vx, vy=self._vy,
+                speed=1.8, ideal_tiles=2.0, wangle=self._wangle,
+                result=self)
+
+            # Apply movement with wall collision (only when gmap is available)
+            if gmap:
+                dx = nx - self.x; dy = ny - self.y
+                sz = self.SIZE; ts = TILE_SIZE
+                def blocked(x, y):
+                    for cx2,cy2 in [(x,y),(x+sz-1,y),(x,y+sz-1),(x+sz-1,y+sz-1)]:
+                        t = gmap.get(int(cx2//ts), int(cy2//ts))
+                        if not tile_walkable(t) and not tile_swimmable(t): return True
+                    return False
+                if dx and not blocked(self.x+dx, self.y): self.x += dx
+                else: self._vx *= -0.3
+                if dy and not blocked(self.x, self.y+dy): self.y += dy
+                else: self._vy *= -0.3
+            else:
+                self.x, self.y = nx, ny
+
+    def draw(self, surf, cam_x, cam_y, asset_mgr=None, brightness=255):
+        if not self.alive or self.state != 'following': return
+        sx = int(self.x) - cam_x; sy = int(self.y) - cam_y; sz = self.SIZE
+        pygame.draw.ellipse(surf, self.color, (sx+3, sy+sz//3, sz-6, sz*2//3))
+        pygame.draw.circle(surf, (255,220,185), (sx+sz//2, sy+sz//4), sz//4)
+        crown_pts = [(sx+4,sy+sz//4-4),(sx+6,sy+sz//4-9),(sx+sz//2,sy+sz//4-6),
+                     (sx+sz-6,sy+sz//4-9),(sx+sz-4,sy+sz//4-4)]
+        pygame.draw.polygon(surf, (255,215,0), crown_pts)
+        if self.hp < self.max_hp:
+            frac = self.hp / self.max_hp
+            pygame.draw.rect(surf, RED,   (sx, sy-6, sz, 4))
+            pygame.draw.rect(surf, GREEN, (sx, sy-6, int(sz*frac), 4))
+
+
+# ── Town NPCs ─────────────────────────────────────────────────────────────────
+class Pet:
+    """Companion entity created from a charmed enemy.
+    Copies appearance and stats from the source mob; follows owner via trail,
+    attacks only mobs that attacked it or that the player hit.
+    Never targeted by player auto-aim or player melee/ranged.
+    """
+    _GHOST_ETYPES = {'ghost', 'ice_wraith', 'will_o'}
+
+    def __init__(self, source):
+        self.etype        = source.etype
+        self.name         = f"[Pet] {source.name}"
+        self.color        = source.color
+        self.SIZE         = source.SIZE
+        self.x            = float(source.x)
+        self.y            = float(source.y)
+        self.hp           = source.hp
+        self.max_hp       = source.max_hp
+        self.speed        = source.speed              # genuine mob speed
+        self.damage       = source.damage
+        self.defense      = source.defense
+        self.attack_range = source.attack_range
+        self._atk_cool_max= source.ATTACK_COOL
+        self._cool        = 0
+        self.iframes      = 0
+        self.alive        = True
+        self.is_ghost     = False   # needed for _nearest_player filtering
+        self.player_idx   = -1      # marks as non-player in some checks
+        self.owner        = None
+        self._threats     = set()
+        self._target      = None
+        self._trail       = []
+        self._was_just_hit = False
+        self._vx = self._vy = 0.0   # smoothed velocity
+        self._wangle      = 0.0     # wander angle
+        self._is_ghost_pet = source.etype in self._GHOST_ETYPES
+        self.animator     = getattr(source, 'animator', None)
+
+    @property
+    def cx(self): return self.x + self.SIZE / 2
+    @property
+    def cy(self): return self.y + self.SIZE / 2
+    @property
+    def rect(self): return pygame.Rect(int(self.x), int(self.y), self.SIZE, self.SIZE)
+
+    def dist_to(self, other):
+        return math.hypot(other.cx - self.cx, other.cy - self.cy)
+
+    def take_damage(self, dmg, difficulty=0):
+        if self.iframes > 0 or not self.alive: return 0
+        actual = max(1, dmg - self.defense)
+        self.hp = max(0, self.hp - actual)
+        self.iframes = 60
+        if self.hp <= 0:
+            self.alive = False
+        # Aggro back on whatever hit us — the game loop adds to threat set
+        # by checking _was_just_hit flag
+        self._was_just_hit = True
+        return actual
+
+    def register_threat(self, enemy):
+        """Mark an enemy as a target (it attacked us or the owner)."""
+        self._threats.add(id(enemy))
+
+    def update(self, gmap, enemies):
+        if not self.alive: return
+        if self.iframes > 0: self.iframes -= 1
+        if self._cool > 0:   self._cool   -= 1
+
+        owner = self.owner
+
+        # ── Update position trail ──────────────────────────────────────────
+        if owner and getattr(owner, 'alive', False):
+            last = self._trail[-1] if self._trail else None
+            if last is None or math.hypot(owner.cx-last[0], owner.cy-last[1]) > TILE_SIZE*0.5:
+                self._trail.append((owner.cx, owner.cy))
+                if len(self._trail) > 40:
+                    self._trail.pop(0)
+
+        # ── Off-screen check: deaggro and teleport ────────────────────────
+        if owner and getattr(owner, 'alive', False):
+            dist_owner = math.hypot(owner.cx - self.cx, owner.cy - self.cy)
+            if dist_owner > TILE_SIZE * 18:   # off-screen threshold
+                self._threats.clear()
+                self._target = None
+                near = gmap.find_walkable_near(
+                    int(owner.cx//TILE_SIZE), int(owner.cy//TILE_SIZE), 3)
+                self.x = near[0]*TILE_SIZE + (TILE_SIZE-self.SIZE)//2
+                self.y = near[1]*TILE_SIZE + (TILE_SIZE-self.SIZE)//2
+                self._trail.clear()
+                return
+
+        # ── Pick attack target (registered threats only) ──────────────────
+        live_threats = [e for e in enemies
+                        if e.alive and id(e) in self._threats
+                        and math.hypot(e.cx-self.cx, e.cy-self.cy) < TILE_SIZE*12]
+        self._target = min(live_threats, key=lambda e: self.dist_to(e)) if live_threats else None
+
+        # ── Combat ────────────────────────────────────────────────────────
+        if self._target:
+            dist = self.dist_to(self._target)
+            if dist <= self.attack_range:
+                if self._cool <= 0:
+                    self._target.take_damage(self.damage)
+                    if hasattr(self._target, 'on_attacked'):
+                        self._target.on_attacked()
+                    self._cool = self._atk_cool_max
+                    self._threats.add(id(self._target))
+                return   # stay in melee position
+            else:
+                dx = self._target.cx - self.cx; dy = self._target.cy - self.cy
+                d  = math.hypot(dx, dy) or 1
+                self._move(dx/d * self.speed, dy/d * self.speed, gmap)
+            return
+
+        # ── Follow owner (spring-damper steering + wander) ────────────────
+        if owner and getattr(owner, 'alive', False):
+            # Compute desired position via spring-damper
+            nx, ny = _smooth_follow(
+                self.cx, self.cy, self.x, self.y,
+                self._trail, owner,
+                vx=self._vx, vy=self._vy,
+                speed=self.speed, ideal_tiles=1.5,
+                wangle=self._wangle, result=self)
+            # Apply through collision-aware _move
+            self._move(nx - self.x, ny - self.y, gmap)
+
+    def _move(self, dx, dy, gmap):
+        sz  = self.SIZE
+        mw  = gmap.width  * TILE_SIZE
+        mh  = gmap.height * TILE_SIZE
+        ghost = self._is_ghost_pet
+        if dx != 0:
+            nx = max(0, min(self.x + dx, mw - sz - 1))
+            if ghost or not self._tile_blocked(nx, self.y, sz, gmap):
+                self.x = nx
+        if dy != 0:
+            ny = max(0, min(self.y + dy, mh - sz - 1))
+            if ghost or not self._tile_blocked(self.x, ny, sz, gmap):
+                self.y = ny
+
+    def _tile_blocked(self, x, y, sz, gmap):
+        from constants import TILE_SIZE as TS
+        for cx, cy in [(x,y),(x+sz-1,y),(x,y+sz-1),(x+sz-1,y+sz-1)]:
+            t = gmap.get(int(cx//TS), int(cy//TS))
+            from constants import tile_walkable, tile_swimmable
+            if not tile_walkable(t) and not tile_swimmable(t):
+                return True
+        return False
+
+    def draw(self, surf, cam_x, cam_y, asset_mgr=None, brightness=1.0):
+        if not self.alive: return
+        sx = int(self.x) - cam_x; sy = int(self.y) - cam_y
+        sz = self.SIZE
+        # Draw with a green tint to distinguish from hostile mobs
+        col = tuple(min(255, int(c*0.7 + 80)) for c in self.color[:3])
+        pygame.draw.rect(surf, col, (sx, sy, sz, sz), border_radius=4)
+        pygame.draw.rect(surf, (80, 255, 80), (sx-2, sy-2, sz+4, sz+4), 2, border_radius=5)
+        # HP bar
+        frac = self.hp / self.max_hp
+        pygame.draw.rect(surf, RED,   (sx, sy-5, sz, 3))
+        pygame.draw.rect(surf, GREEN, (sx, sy-5, int(sz*frac), 3))
+        # Name tag
+        try:
+            fnt = pygame.font.SysFont("monospace", 8)
+            lbl = fnt.render(self.etype[:6], True, (200,255,200))
+            surf.blit(lbl, (sx, sy+sz+1))
+        except Exception: pass
+
+
+class NPC:
+    """Base for non-hostile town characters (Lorekeeper, Trader)."""
+    SIZE = ENTITY_SIZE
+
+    def __init__(self, tx, ty, name, color, dialog_pages):
+        self.tx      = tx; self.ty = ty
+        self.name    = name
+        self.color   = color
+        self.pages   = dialog_pages   # list of strings
+        self.page    = 0
+        self.x       = tx * TILE_SIZE + (TILE_SIZE - self.SIZE) // 2
+        self.y       = ty * TILE_SIZE + (TILE_SIZE - self.SIZE) // 2
+
+    @property
+    def cx(self): return self.x + self.SIZE / 2
+    @property
+    def cy(self): return self.y + self.SIZE / 2
+    @property
+    def rect(self): return pygame.Rect(int(self.x), int(self.y), self.SIZE, self.SIZE)
+
+    def next_page(self):
+        self.page = (self.page + 1) % len(self.pages)
+
+    def current_text(self): return self.pages[self.page]
+
+    def draw(self, surf, cam_x, cam_y, asset_mgr=None, brightness=255):
+        sx = int(self.x) - cam_x; sy = int(self.y) - cam_y
+        sz = self.SIZE
+        pygame.draw.rect(surf, self.color, (sx, sy, sz, sz), border_radius=4)
+        pygame.draw.rect(surf, WHITE,       (sx, sy, sz, sz), 2,  border_radius=4)
+        # Name tag
+        font = pygame.font.SysFont("monospace", 9, bold=False)
+        label = font.render(self.name[:8], True, YELLOW)
+        surf.blit(label, (sx - label.get_width()//2 + sz//2, sy - 12))
+
+
+class Lorekeeper(NPC):
+    DIALOG = [
+        "Welcome, brave soul!\nI am the Lorekeeper.\nListen well...",
+        "Four dragons dwell in\nthe castle dungeons\nbeyond the wilds.",
+        "Each holds a princess\ncaptive. Slay the\ndragon to free her.",
+        "Lead her safely to\nthe shrine here in\ntown to save her.",
+        "If she falls in battle\nshe returns to the\ncastle shrine. Revive\nher there.",
+        "Gates: North=Snow,\nSouth=Desert,\nEast=Forest,\nWest=Swamp.",
+        "Each biome holds a\nhaunted town. Beyond\nlies the castle.",
+        "Save all four and\nthe realm will be\nfree. Good luck!",
+    ]
+
+    def __init__(self, tx, ty):
+        super().__init__(tx, ty, "Sage", (180, 140, 220), self.DIALOG)
+
+
+class Trader(NPC):
+    # (iid, buy_price, sell_price)  — buy=from trader, sell=to trader
+    STOCK = [
+        ('sword',      80,  30),
+        ('axe',        60,  22),
+        ('pickaxe',    55,  20),
+        ('knife',      30,  10),
+        ('bow',        90,  35),
+        ('spear',      70,  25),
+        ('shield',     75,  28),
+        ('potion',     25,   8),
+        ('mana_pot',   30,  10),
+        ('bread',      12,   3),
+        ('arrow',       5,   2),
+        ('stone',       4,   1),
+        ('rope',       18,   5),
+        ('lantern',    40,  14),
+        ('torch',      15,   4),
+        ('candle',     10,   3),
+        ('charm_spell',350,   0),   # charm — cannot sell back
+    ]
+    DIALOG = [
+        "Greetings! I trade\ngold for goods.",
+        "I buy your loot too!\nThough not dragon\ntreasure — too hot!",
+        "The Charm Spell is\npricey but powerful.\nOne use per spell.",
+    ]
+
+    def __init__(self, tx, ty):
+        super().__init__(tx, ty, "Trader", (200, 160, 80), self.DIALOG)

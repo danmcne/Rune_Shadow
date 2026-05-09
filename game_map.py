@@ -118,15 +118,24 @@ class GameMap:
 
     # ── Draw ─────────────────────────────────────────────────────────────────
     def draw(self, surf, cam_x, cam_y, player_px, player_py,
-             light_radius_tiles, asset_mgr=None):
+             light_radius_tiles, asset_mgr=None, extra_lights=None):
+        """Draw the map.  extra_lights is an optional list of (px, py, radius)
+        for additional light sources (e.g. Player 2).  Each tile's brightness
+        is the maximum contribution from any source."""
         vw, vh = surf.get_width(), surf.get_height()
         tx_s = max(0, cam_x // TILE_SIZE)
         ty_s = max(0, cam_y // TILE_SIZE)
         tx_e = min(self.width,  (cam_x + vw) // TILE_SIZE + 2)
         ty_e = min(self.height, (cam_y + vh) // TILE_SIZE + 2)
 
+        # Build the full list of light sources as (cx, cy, max_dist)
         pcx = player_px + ENTITY_SIZE // 2
         pcy = player_py + ENTITY_SIZE // 2
+        lights = [(pcx, pcy, light_radius_tiles * TILE_SIZE)]
+        if extra_lights:
+            for lpx, lpy, lr in extra_lights:
+                lights.append((lpx + ENTITY_SIZE//2, lpy + ENTITY_SIZE//2, lr * TILE_SIZE))
+
         tint_surf = None
 
         for ty in range(ty_s, ty_e):
@@ -137,15 +146,18 @@ class GameMap:
 
                 brightness = 255
                 if self.is_dungeon and self.ambient < 255:
-                    dist = (((tx*TILE_SIZE+16)-pcx)**2 +
-                            ((ty*TILE_SIZE+16)-pcy)**2)**0.5
-                    max_dist = light_radius_tiles * TILE_SIZE
+                    tcx = tx * TILE_SIZE + 16
+                    tcy = ty * TILE_SIZE + 16
                     brightness = self.ambient
-                    if dist < max_dist:
-                        ratio = 1.0 - dist / max_dist
-                        brightness = min(255, int(self.ambient + ratio*(255-self.ambient)))
+                    for lcx, lcy, max_dist in lights:
+                        dist = ((tcx - lcx)**2 + (tcy - lcy)**2) ** 0.5
+                        if dist < max_dist:
+                            ratio = 1.0 - dist / max_dist
+                            b = min(255, int(self.ambient + ratio * (255 - self.ambient)))
+                            if b > brightness:
+                                brightness = b
                     if brightness < 10:
-                        pygame.draw.rect(surf,(0,0,0),(sx,sy,TILE_SIZE,TILE_SIZE))
+                        pygame.draw.rect(surf, (0, 0, 0), (sx, sy, TILE_SIZE, TILE_SIZE))
                         continue
 
                 sprite = asset_mgr.get_tile(t) if asset_mgr else None
@@ -153,9 +165,9 @@ class GameMap:
                     surf.blit(sprite, (sx, sy))
                     if brightness < 255:
                         if not tint_surf:
-                            tint_surf = pygame.Surface((TILE_SIZE,TILE_SIZE), pygame.SRCALPHA)
-                        tint_surf.fill((brightness,brightness,brightness,255))
-                        surf.blit(tint_surf,(sx,sy),special_flags=pygame.BLEND_RGBA_MULT)
+                            tint_surf = pygame.Surface((TILE_SIZE, TILE_SIZE), pygame.SRCALPHA)
+                        tint_surf.fill((brightness, brightness, brightness, 255))
+                        surf.blit(tint_surf, (sx, sy), special_flags=pygame.BLEND_RGBA_MULT)
                 else:
                     col = tile_color(t)
                     if brightness < 255:
@@ -174,13 +186,21 @@ class GameMap:
         for gi in self.ground_items:
             gi.draw(surf, cam_x, cam_y)
 
-    def get_brightness_at(self, px, py, player_px, player_py, light_radius_tiles):
+    def get_brightness_at(self, px, py, player_px, player_py,
+                          light_radius_tiles, extra_lights=None):
         if not self.is_dungeon or self.ambient >= 255:
             return 255
-        pcx = player_px + ENTITY_SIZE//2
-        pcy = player_py + ENTITY_SIZE//2
-        dist = ((px-pcx)**2+(py-pcy)**2)**0.5
-        max_dist = light_radius_tiles * TILE_SIZE
-        if dist >= max_dist: return self.ambient
-        ratio = 1.0 - dist/max_dist
-        return min(255, int(self.ambient + ratio*(255-self.ambient)))
+        lights = [(player_px + ENTITY_SIZE//2, player_py + ENTITY_SIZE//2,
+                   light_radius_tiles * TILE_SIZE)]
+        if extra_lights:
+            for lpx, lpy, lr in extra_lights:
+                lights.append((lpx + ENTITY_SIZE//2, lpy + ENTITY_SIZE//2, lr * TILE_SIZE))
+        brightness = self.ambient
+        for lcx, lcy, max_dist in lights:
+            dist = ((px - lcx)**2 + (py - lcy)**2) ** 0.5
+            if dist < max_dist:
+                ratio = 1.0 - dist / max_dist
+                b = min(255, int(self.ambient + ratio * (255 - self.ambient)))
+                if b > brightness:
+                    brightness = b
+        return brightness

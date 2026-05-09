@@ -1,15 +1,45 @@
 {
   "seed": 12345,
-  "score": 0,
-  "num_players": 1,
+  "score": 140,
+  "num_players": 2,
   "players": [
     {
-      "x": 1283.0,
-      "y": 1305.0,
-      "hp": 100,
-      "max_hp": 100,
-      "mana": 60,
-      "max_mana": 60,
+      "x": 1281.1184000000064,
+      "y": 1384.0591999999997,
+      "hp": 120,
+      "max_hp": 120,
+      "mana": 80,
+      "max_mana": 80,
+      "gold": 5,
+      "hotbar": [
+        "knife",
+        "staff",
+        "sling",
+        "candle",
+        "spell_basic",
+        null,
+        null,
+        null
+      ],
+      "aim_mode": "auto",
+      "inventory": {
+        "knife": 1,
+        "staff": 1,
+        "sling": 1,
+        "candle": 1,
+        "spell_basic": 1,
+        "stone": 15,
+        "mushroom": 3,
+        "herb": 2
+      }
+    },
+    {
+      "x": 1271.0,
+      "y": 1295.0,
+      "hp": 120,
+      "max_hp": 120,
+      "mana": 80,
+      "max_mana": 80,
       "gold": 0,
       "hotbar": [
         "knife",
@@ -21,7 +51,7 @@
         null,
         null
       ],
-      "aim_mode": "mouse",
+      "aim_mode": "auto",
       "inventory": {
         "knife": 1,
         "staff": 1,
@@ -37,9 +67,26 @@
   "map_key": "town",
   "dungeon_id": -1,
   "dungeon_level": 0,
-  "boss_killed": {},
-  "chest_opened": {
-    "town": []
+  "boss_killed": {
+    "0_0": true
   },
-  "dungeon_chests": {}
+  "chest_opened": {
+    "town": [],
+    "east": []
+  },
+  "dungeon_chests": {
+    "0_0": []
+  },
+  "princess_data": {
+    "9": null,
+    "10": null,
+    "11": null,
+    "12": null
+  },
+  "princesses_saved": [],
+  "mob_kills": 9,
+  "charmed_etypes": [
+    null,
+    null
+  ]
 }

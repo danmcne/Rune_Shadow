@@ -314,6 +314,10 @@ class Inventory:
         """Iterator over (item, count) pairs."""
         return iter(self._slots)
 
+    def __iter__(self):
+        """Allow list(inventory) and for item,cnt in inventory."""
+        return iter(self._slots)
+
     def __len__(self):
         return len(self._slots)
 
@@ -418,6 +422,11 @@ BERSERKER_DRAUGHT = _reg(_consumable('berserk_draught', "Berserker Draught",
 DRAGON_SCALE  = _reg(_ingredient('dragon_scale', "Dragon Scale",
                                    COL_DRAGON, 50,
                                    desc="A glittering dragon scale. Rare crafting component."))
+
+CHARM_SPELL   = _reg(_consumable('charm_spell', "Charm Spell", 0, 0,
+                                   (200, 80, 255), value=350, stack=False,
+                                   desc="Use on a nearby enemy to charm it. It fights for you!"))
+ITEMS['charm_spell'].stackable = False
 
 # ── Extend drop / boss tables ─────────────────────────────────────────────────
 DROP_TABLES['mimic']  = [('coin', 1.0), ('coin', 1.0), ('gem', 0.60),
